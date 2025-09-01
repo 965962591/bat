@@ -28,11 +28,10 @@ import wmi
 import pythoncom
 import configparser
 
-icon_abs = False  # 全局标志位，控制路径类型
 from qt_material import apply_stylesheet
 
 # 全局变量定义缓存目录
-APP_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),"app_cache")
+APP_CACHE_DIR = os.path.join(os.path.dirname(__file__), "app_cache")
 
 class USBDeviceMonitor:
     """USB设备实时监控类（Windows平台专用）"""
@@ -466,7 +465,6 @@ class LogVerboseMaskApp(QWidget):
         self.setWindowTitle("Bat脚本执行")
         self.resize(1200, 900)
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "bat.ico")
-        print(icon_path)
         self.setWindowIcon(QIcon(icon_path))
         self.mask_value = 0x00000000
 
