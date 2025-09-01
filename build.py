@@ -21,7 +21,7 @@ if sys.platform == "win32":
         '--windows-icon-from-ico=icon/new_start_256.ico',
         '--windows-disable-console',
         '--output-dir=output',        
-        'aebox_startup.py',
+        'bat.py',
         '--windows-file-version=3.8.2.5',
         '--windows-product-version=3.8.2.5',
         '--windows-file-description=aebox辅助调试工具启动器',

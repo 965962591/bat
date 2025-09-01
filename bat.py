@@ -29,6 +29,7 @@ import pythoncom
 import configparser
 
 icon_abs = False  # 全局标志位，控制路径类型
+from qt_material import apply_stylesheet
 
 # 全局变量定义缓存目录
 APP_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),"app_cache")
@@ -464,7 +465,8 @@ class LogVerboseMaskApp(QWidget):
     def initUI(self):
         self.setWindowTitle("Bat脚本执行")
         self.resize(1200, 900)
-        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icon", "bat.ico")
+        icon_path = os.path.join(os.path.dirname(__file__), "icon", "bat.ico")
+        print(icon_path)
         self.setWindowIcon(QIcon(icon_path))
         self.mask_value = 0x00000000
 
@@ -1302,7 +1304,7 @@ class FileDownloadDialog(QDialog):
         self.setMinimumSize(600, 500)
         
         # 设置图标
-        icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icon", "file_down.ico")
+        icon_path = os.path.join(os.path.dirname(__file__), "icon", "file_down.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
@@ -2281,6 +2283,7 @@ class DownloadThread(QThread):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    apply_stylesheet(app, theme='light_blue.xml', extra={'font_size': 16})
     ex = LogVerboseMaskApp()
     ex.show()
     sys.exit(app.exec_())
