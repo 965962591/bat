@@ -1174,6 +1174,9 @@ class LogVerboseMaskApp(QWidget):
             f"adb -s {selected_device} wait-for-device"
         ])
 
+        # 使用集合来避免重复命令
+        unique_commands = set()
+
         # 添加文本框中的命令（指定设备）
         text_edit_commands = self.mask_display.toPlainText().split("\n")
         for cmd in text_edit_commands:
@@ -1181,13 +1184,13 @@ class LogVerboseMaskApp(QWidget):
                 if cmd.startswith("adb shell"):
                     # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
                     new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
-                    all_commands.append(new_cmd)
+                    unique_commands.add(new_cmd)
                 elif cmd.startswith("adb "):
                     # 对所有其他 adb 命令添加设备号
                     new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
-                    all_commands.append(new_cmd)
+                    unique_commands.add(new_cmd)
                 else:
-                    all_commands.append(cmd)
+                    unique_commands.add(cmd)
 
         # 添加特定命令（指定设备）
         for checkbox in self.command_checkboxes:
@@ -1196,13 +1199,16 @@ class LogVerboseMaskApp(QWidget):
                     if cmd.startswith("adb shell"):
                         # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
                         new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
-                        all_commands.append(new_cmd)
+                        unique_commands.add(new_cmd)
                     elif cmd.startswith("adb "):
                         # 对所有其他 adb 命令添加设备号
                         new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
-                        all_commands.append(new_cmd)
+                        unique_commands.add(new_cmd)
                     else:
-                        all_commands.append(cmd)
+                        unique_commands.add(cmd)
+
+        # 将集合转换为列表，保持顺序
+        all_commands = list(unique_commands)
 
         # 添加查看配置文件的命令（指定设备）
         all_commands.append(
@@ -1255,45 +1261,12 @@ class LogVerboseMaskApp(QWidget):
                                   f"bat脚本已生成：\n{bat_path}\n\n即将运行此脚本...")
             
             # 直接运行bat文件（调用Windows cmd窗口）
-            # 使用os.startfile直接打开bat文件，这样会使用系统默认的cmd窗口
             try:
-                # 方法1：使用os.startfile直接打开bat文件（推荐）
+                # 使用os.startfile直接打开bat文件，这是最原生的Windows方式
                 os.startfile(bat_path)
             except Exception as e:
-                # 方法2：如果os.startfile失败，使用subprocess调用cmd
-                try:
-                    startupinfo = None
-                    if hasattr(subprocess, 'STARTUPINFO'):
-                        startupinfo = subprocess.STARTUPINFO()
-                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                        startupinfo.wShowWindow = 1  # 1 = SW_SHOW，显示窗口
-                    
-                    # 使用线程异步执行，避免阻塞主界面
-                    def run_bat_async():
-                        try:
-                            # 使用cmd /k 保持窗口打开，让用户看到执行结果
-                            subprocess.run(
-                                f'cmd /k "{bat_path}"', 
-                                shell=True,
-                                startupinfo=startupinfo
-                            )
-                        except Exception as e:
-                            print(f"运行bat脚本时出错: {e}")
-                    
-                    # 创建并启动线程
-                    import threading
-                    bat_thread = threading.Thread(target=run_bat_async)
-                    bat_thread.daemon = True  # 设置为守护线程
-                    bat_thread.start()
-                    
-                except Exception as subprocess_error:
-                    print(f"subprocess调用失败: {subprocess_error}")
-                    # 方法3：最后的备选方案，使用start命令
-                    try:
-                        os.system(f'start "{bat_filename}" "{bat_path}"')
-                    except Exception as start_error:
-                        print(f"start命令也失败: {start_error}")
-                        QMessageBox.warning(self, "警告", f"无法自动运行bat脚本，请手动运行：\n{bat_path}")
+                print(f"无法自动运行bat脚本: {e}")
+                QMessageBox.warning(self, "警告", f"无法自动运行bat脚本，请手动运行：\n{bat_path}")
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"生成或运行bat脚本时出错：\n{str(e)}")

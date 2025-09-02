@@ -52,5 +52,10 @@
         "adb shell pkill camerahal",
         "adb shell pkill cameraserver",
         "adb shell pkill camerahalserver"
+    ],
+    "adb pull": [
+        "adb root",
+        "adb remount",
+        "adb pull sdcard/dcim/camera/ C:\\Users\\chenyang3\\Pictures\\test"
     ]
 }
