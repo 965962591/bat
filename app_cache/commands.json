@@ -64,5 +64,18 @@
         "md \"%FOLDER%\" 2>nul",
         "cd \"%FOLDER%",
         "adb pull sdcard/dcim/camera/"
+    ],
+    "录屏_请使用原生运行": [
+        "@echo.",
+        "@echo off",
+        "adb shell mkdir /sdcard/Screenrecord/",
+        "@echo. -------start---------------------------",
+        "@echo.   Ctrl+C STOP! 按下N下载并打开截图文件夹",
+        "FOR /F \"tokens=*\" %%A IN ('TIME/T') DO SET Now=%%A",
+        "adb shell screenrecord /sdcard/Screenrecord/screenrecord_%Now:~0,2%%Now:~3,2%.mp4",
+        "adb pull /sdcard/Screenrecord .\\",
+        "start explorer \".\\Screenrecord\"",
+        "echo success!",
+        "pause"
     ]
 }

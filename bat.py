@@ -29,6 +29,7 @@ import os
 import wmi
 import pythoncom
 import configparser
+from datetime import datetime
 
 from qt_material import apply_stylesheet
 
@@ -463,8 +464,95 @@ class LogVerboseMaskApp(QWidget):
             QMessageBox.critical(self, "错误", error_msg)
             # print(error_msg)
 
+    def take_screenshot(self):
+        """通过ADB发送截屏键事件"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            remote_dir = "/sdcard/Pictures/Screenshots/"
+            remote_path = f"{remote_dir}Screenshot_{timestamp}.png"
+
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            # 确保目录存在
+            mkdir_cmd = f"adb -s {selected_device} shell mkdir -p {remote_dir}"
+            subprocess.run(
+                mkdir_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            # 执行截屏
+            screencap_cmd = f"adb -s {selected_device} shell screencap -p {remote_path}"
+            result = subprocess.run(
+                screencap_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            if result.returncode == 0:
+                print(f"已保存截图到: {remote_path}")
+                QMessageBox.information(self, "成功", f"已保存截图到: {remote_path}")
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "未知错误"
+                QMessageBox.warning(self, "执行失败", f"截屏失败: {error_msg}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行截屏命令时出错: {str(e)}")
+
+
+    def take_photo(self):
+        """通过ADB发送拍照键事件"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        try:
+            command = f"adb -s {selected_device} shell input keyevent 27"
+
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            if result.returncode == 0:
+                # QMessageBox.information(self, "成功", "已发送拍照按键事件")
+                print(f"已发送拍照按键事件: {command}")
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "未知错误"
+                QMessageBox.warning(self, "执行失败", f"发送拍照事件失败: {error_msg}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行拍照命令时出错: {str(e)}")
+
     def initUI(self):
-        self.setWindowTitle("Bat脚本执行")
+        self.setWindowTitle("Bat脚本管理器")
         self.resize(1200, 900)
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "bat.ico")
         self.setWindowIcon(QIcon(icon_path))
@@ -489,11 +577,18 @@ class LogVerboseMaskApp(QWidget):
         only_charge_button = QPushButton("仅充电")
         file_transfer_button = QPushButton("文件传输")
         photo_transfer_button = QPushButton("传输照片")
-        
+        kuajie_label = QLabel("快速功能:")
+        camera_button = QPushButton("拍照")
+        camera_button.setToolTip("启动相机后点击拍照")
+        screenshot_button = QPushButton("截屏")
+        screenshot_button.setToolTip("截图路径/sdcard/Pictures/Screenshots/")
+
         # 连接按钮信号
         only_charge_button.clicked.connect(lambda: self.switch_usb_mode("仅充电", ""))
         file_transfer_button.clicked.connect(lambda: self.switch_usb_mode("文件传输", "mtp"))
         photo_transfer_button.clicked.connect(lambda: self.switch_usb_mode("传输照片", "ptp"))
+        camera_button.clicked.connect(self.take_photo)
+        screenshot_button.clicked.connect(self.take_screenshot)
         
         device_layout.addWidget(device_label)
         device_layout.addWidget(self.device_combo)
@@ -503,6 +598,9 @@ class LogVerboseMaskApp(QWidget):
         device_layout.addWidget(only_charge_button)
         device_layout.addWidget(file_transfer_button)
         device_layout.addWidget(photo_transfer_button)
+        device_layout.addWidget(kuajie_label)
+        device_layout.addWidget(camera_button)
+        device_layout.addWidget(screenshot_button)
         device_layout.addStretch()  # 添加弹性空间
         
         main_layout.addLayout(device_layout)
