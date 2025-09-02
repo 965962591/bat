@@ -1339,7 +1339,38 @@ class LogVerboseMaskApp(QWidget):
         if hasattr(self, 'refresh_timer'):
             self.refresh_timer.stop()
         
+        # 程序关闭时，杀掉adb
+        self.kill_adb()
+        
         event.accept()
+
+    def kill_adb(self):
+        """杀掉adb进程"""
+        try:
+            # 设置启动信息以隐藏命令窗口
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            # 执行adb kill-server命令
+            result = subprocess.run(
+                ['adb', 'kill-server'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            
+            if result.returncode == 0:
+                print("[程序关闭] ADB服务器已成功关闭")
+            else:
+                print(f"[程序关闭] ADB服务器关闭失败: {result.stderr}")
+                
+        except Exception as e:
+            print(f"[程序关闭] 关闭ADB服务器时出错: {e}")
 
     def keyPressEvent(self, event):
         """按下 Esc 键关闭窗口"""
