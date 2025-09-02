@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QProgressBar,
 )
+from PyQt5.QtWidgets import QScrollArea
 import subprocess
 from PyQt5.QtGui import QIcon
 import threading
@@ -1338,39 +1339,8 @@ class LogVerboseMaskApp(QWidget):
         # 停止定时器
         if hasattr(self, 'refresh_timer'):
             self.refresh_timer.stop()
-        
-        # 程序关闭时，杀掉adb
-        self.kill_adb()
-        
         event.accept()
 
-    def kill_adb(self):
-        """杀掉adb进程"""
-        try:
-            # 设置启动信息以隐藏命令窗口
-            startupinfo = None
-            if hasattr(subprocess, 'STARTUPINFO'):
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-            
-            # 执行adb kill-server命令
-            result = subprocess.run(
-                ['adb', 'kill-server'],
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                startupinfo=startupinfo,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-            )
-            
-            if result.returncode == 0:
-                print("[程序关闭] ADB服务器已成功关闭")
-            else:
-                print(f"[程序关闭] ADB服务器关闭失败: {result.stderr}")
-                
-        except Exception as e:
-            print(f"[程序关闭] 关闭ADB服务器时出错: {e}")
 
     def keyPressEvent(self, event):
         """按下 Esc 键关闭窗口"""
@@ -1844,7 +1814,7 @@ class FileDownloadDialog(QDialog):
         subfolder_label = QLabel("子文件夹命名:")
         self.subfolder_combo = QComboBox()
         self.subfolder_combo.addItems(["年\\日", "年\\月\\日", "年\\月\\日\\时", "年\\月\\日\\时分", "年\\月\\日\\时分秒"])
-        self.subfolder_combo.setCurrentText("年\\日")
+        self.subfolder_combo.setCurrentText("年\\月\\日\\时分秒")
         
         # 根据选择的子文件夹格式动态显示示例
         self.subfolder_example = QLabel()
@@ -1902,32 +1872,25 @@ class FileDownloadDialog(QDialog):
         progress_layout = QVBoxLayout(progress_group)
         progress_layout.setContentsMargins(0, 0, 0, 0)
         
-        # 总体进度
-        overall_progress_label = QLabel("总体进度:")
-        overall_progress_label.setStyleSheet("font-weight: bold; color: #2c3e50;")
-        progress_layout.addWidget(overall_progress_label)
+        # 创建滚动区域来容纳多个进度条
+
+        self.progress_scroll_area = QScrollArea()
+        self.progress_scroll_area.setWidgetResizable(True)
+        self.progress_scroll_area.setMaximumHeight(200)  # 限制最大高度
+        self.progress_scroll_area.setMinimumHeight(100)  # 设置最小高度
         
-        self.overall_progress_bar = QProgressBar()
-        self.overall_progress_bar.setRange(0, 100)
-        self.overall_progress_bar.setValue(0)
-        self.overall_progress_bar.setFormat("总体进度: %p%")
-        progress_layout.addWidget(self.overall_progress_bar)
+        # 创建容器widget来放置进度条
+        self.progress_container = QWidget()
+        self.progress_bars_layout = QVBoxLayout(self.progress_container)
+        self.progress_bars_layout.setContentsMargins(0, 0, 0, 0)
+        self.progress_bars_layout.setSpacing(5)
         
-        # 当前任务进度
-        current_progress_label = QLabel("当前任务:")
-        current_progress_label.setStyleSheet("font-weight: bold; color: #2c3e50;")
-        progress_layout.addWidget(current_progress_label)
+        # 设置滚动区域的widget
+        self.progress_scroll_area.setWidget(self.progress_container)
+        progress_layout.addWidget(self.progress_scroll_area)
         
-        self.current_progress_bar = QProgressBar()
-        self.current_progress_bar.setRange(0, 100)
-        self.current_progress_bar.setValue(0)
-        self.current_progress_bar.setFormat("当前任务: %p%")
-        progress_layout.addWidget(self.current_progress_bar)
-        
-        # 详细进度信息
-        self.progress_label = QLabel("准备就绪")
-        self.progress_label.setStyleSheet("color: #27ae60; font-weight: bold;")
-        progress_layout.addWidget(self.progress_label)
+        # 存储进度条的字典 {device_id:folder_name -> (progress_bar, label)}
+        self.progress_bars_dict = {}
         
         layout.addWidget(progress_group)
         
@@ -2119,11 +2082,6 @@ class FileDownloadDialog(QDialog):
 
     def start_download(self):
         """开始下载"""
-        # 重置进度条和状态
-        self.overall_progress_bar.setValue(0)
-        self.current_progress_bar.setValue(0)
-        self.progress_label.setText("正在准备下载...")
-        self.progress_label.setStyleSheet("color: #3498db; font-weight: bold;")
         
         # 获取选中的设备（使用原始设备ID）
         selected_devices = []
@@ -2228,6 +2186,9 @@ class FileDownloadDialog(QDialog):
         except Exception:
             pass
         
+        # 创建个体进度条
+        self.create_individual_progress_bars(selected_devices, selected_folders)
+        
         # 创建下载线程
         self.download_thread = DownloadThread(
             selected_devices, 
@@ -2237,52 +2198,97 @@ class FileDownloadDialog(QDialog):
             True,  # 总是使用手动模式，因为我们现在有明确的文件夹列表
             self.device_name_mapping  # 传递设备名称映射
         )
-        self.download_thread.progress_updated.connect(self.update_progress)
         self.download_thread.download_finished.connect(self.download_finished)
         self.download_thread.folder_not_found.connect(self.handle_folder_not_found)  # 连接新信号
         
         # 连接新的进度信号
-        self.download_thread.overall_progress_updated.connect(self.update_overall_progress)
-        self.download_thread.current_progress_updated.connect(self.update_current_progress)
+        self.download_thread.task_progress_updated.connect(self.update_individual_progress)
         
         self.download_thread.start()
         
         # 禁用下载按钮
         self.download_btn.setEnabled(False)
-        self.progress_label.setText("正在下载...")
-        self.progress_label.setStyleSheet("color: #f39c12; font-weight: bold;")
 
-    def update_progress(self, message):
-        """更新进度信息"""
-        self.progress_label.setText(message)
 
-    def update_overall_progress(self, progress):
-        """更新总体进度条"""
-        self.overall_progress_bar.setValue(progress)
 
-    def update_current_progress(self, progress):
-        """更新当前任务进度条"""
-        self.current_progress_bar.setValue(progress)
+    def create_individual_progress_bars(self, selected_devices, selected_folders):
+        """为选中的设备和文件夹创建进度条"""
+        # 清除现有的进度条
+        self.clear_progress_bars()
+        
+        # 为每个设备-文件夹组合创建进度条
+        for device_id in selected_devices:
+            device_display_name = self.device_name_mapping.get(device_id, device_id)
+            for folder in selected_folders:
+                # 创建进度条容器
+                progress_container = QWidget()
+                progress_layout = QHBoxLayout(progress_container)
+                progress_layout.setContentsMargins(0, 0, 0, 0)
+                progress_layout.setSpacing(5)
+                
+                # 创建标签
+                label = QLabel(f"{device_display_name} - {folder}")
+                label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 150px;")
+                label.setWordWrap(True)
+                
+                # 创建进度条
+                progress_bar = QProgressBar()
+                progress_bar.setRange(0, 100)
+                progress_bar.setValue(0)
+                progress_bar.setFormat("")  # 不显示内置百分比
+                progress_bar.setMinimumWidth(100)
+                
+                # 创建百分比标签
+                percentage_label = QLabel("0%")
+                percentage_label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 40px;")
+                percentage_label.setAlignment(Qt.AlignCenter)
+                
+                # 添加到布局
+                progress_layout.addWidget(label)
+                progress_layout.addWidget(progress_bar)
+                progress_layout.addWidget(percentage_label)
+                progress_layout.addStretch()
+                
+                # 添加到主布局
+                self.progress_bars_layout.addWidget(progress_container)
+                
+                # 存储引用
+                key = f"{device_id}:{folder}"
+                self.progress_bars_dict[key] = (progress_bar, label, percentage_label)
+        
+        # 如果没有进度条，显示提示信息
+        if not self.progress_bars_dict:
+            no_tasks_label = QLabel("没有选中的下载任务")
+            no_tasks_label.setStyleSheet("color: #7f8c8d; font-style: italic; text-align: center;")
+            self.progress_bars_layout.addWidget(no_tasks_label)
+
+    def clear_progress_bars(self):
+        """清除所有进度条"""
+        # 清除字典
+        self.progress_bars_dict.clear()
+        
+        # 清除布局中的所有widget
+        for i in reversed(range(self.progress_bars_layout.count())):
+            widget = self.progress_bars_layout.itemAt(i).widget()
+            if widget:
+                widget.deleteLater()
+
+    def update_individual_progress(self, device_id, folder_name, progress):
+        """更新指定设备-文件夹的进度条"""
+        key = f"{device_id}:{folder_name}"
+        if key in self.progress_bars_dict:
+            progress_bar, label, percentage_label = self.progress_bars_dict[key]
+            progress_bar.setValue(progress)
+            percentage_label.setText(f"{progress}%")
+            
+            # 更新进度信息
+            device_display_name = self.device_name_mapping.get(device_id, device_id)
 
 
 
     def download_finished(self, success_count, total_count, failed_devices):
         """下载完成处理"""
         self.download_btn.setEnabled(True)
-        
-        # 显示下载完成状态，但不强制设置进度条为100%
-        # 让进度条保持实际的完成状态
-        if success_count == total_count:
-            # 所有设备都成功完成
-            self.overall_progress_bar.setValue(100)
-            self.current_progress_bar.setValue(100)
-            self.progress_label.setText("所有下载任务已完成")
-            self.progress_label.setStyleSheet("color: #27ae60; font-weight: bold;")
-        else:
-            # 部分设备失败
-            self.progress_label.setText(f"下载完成：{success_count}/{total_count} 台设备成功")
-            self.progress_label.setStyleSheet("color: #f39c12; font-weight: bold;")
-        
 
 
     def open_target_folder(self):
@@ -2340,16 +2346,12 @@ class FileDownloadDialog(QDialog):
             
             # 重新启用下载按钮并更新状态
             self.download_btn.setEnabled(True)
-            self.progress_label.setText("已选择新文件夹，请重新开始下载")
-            self.progress_label.setStyleSheet("color: #3498db; font-weight: bold;")
             
             # 更新下载按钮状态（确保按钮状态正确）
             self.update_download_button_state()
         else:
             # 用户取消了选择
             self.download_btn.setEnabled(True)
-            self.progress_label.setText("下载已取消")
-            self.progress_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
             
             # 更新下载按钮状态
             self.update_download_button_state()
@@ -2372,8 +2374,7 @@ class DownloadThread(QThread):
     folder_not_found = pyqtSignal(str)  # 新增信号：当目标文件夹不存在时发送
     
     # 新增进度相关信号
-    overall_progress_updated = pyqtSignal(int)  # 总体进度百分比
-    current_progress_updated = pyqtSignal(int)  # 当前任务进度百分比
+    task_progress_updated = pyqtSignal(str, str, int)  # 设备ID, 文件夹名, 进度百分比
     
     def __init__(self, devices, folders, dest_path, subfolder_format, is_manual_mode, device_name_mapping=None):
         super().__init__()
@@ -2395,9 +2396,6 @@ class DownloadThread(QThread):
         
         # 初始化进度
         self.completed_tasks = 0
-        # 发送初始进度信号，确保进度条从0开始
-        self.overall_progress_updated.emit(0)
-        self.current_progress_updated.emit(0)
         
         # 检查目标路径是否存在
         if not os.path.exists(self.dest_path):
@@ -2444,6 +2442,9 @@ class DownloadThread(QThread):
                     for folder in self.folders:
                         self.progress_updated.emit(f"正在下载文件夹: {folder}")
                         
+                        # 发送任务开始信号
+                        self.task_progress_updated.emit(device, folder, 0)
+                        
                         # 执行adb pull命令
                         # 对于置顶文件夹，直接使用完整路径；对于手动选择的文件夹，添加/sdcard前缀
                         if folder.startswith("sdcard/") or folder.startswith("data/"):
@@ -2451,16 +2452,19 @@ class DownloadThread(QThread):
                         else:
                             source_path = f"/sdcard/{folder}"
                         
-                        result = self.execute_adb_pull(device, source_path, device_folder)
+                        result = self.execute_adb_pull(device, source_path, device_folder, folder)
                         
                         if result:
                             self.progress_updated.emit(f"✓ 文件夹 {folder} 下载成功")
+                            # 发送任务完成信号
+                            self.task_progress_updated.emit(device, folder, 100)
                         else:
                             self.progress_updated.emit(f"✗ 文件夹 {folder} 下载失败")
+                            # 发送任务失败信号
+                            self.task_progress_updated.emit(device, folder, 0)
                         
                         # 更新任务完成数
                         self.completed_tasks += 1
-                        self.update_overall_progress()
                 
                 success_count += 1
                 self.progress_updated.emit(f"设备 {device_display_name} 处理完成")
@@ -2489,7 +2493,7 @@ class DownloadThread(QThread):
         else:
             return timestamp.strftime("%Y-%m-%d")
     
-    def execute_adb_pull(self, device, source_path, dest_path):
+    def execute_adb_pull(self, device, source_path, dest_path, folder_name):
         """执行adb pull命令并实时显示进度"""
         try:
             startupinfo = None
@@ -2503,7 +2507,7 @@ class DownloadThread(QThread):
             if remote_file_count == 0:
                 self.progress_updated.emit(f"警告: 源路径 {source_path} 中没有文件")
                 # 设置当前任务进度为100%（因为没有文件需要下载）
-                self.current_progress_updated.emit(100)
+                self.task_progress_updated.emit(device, folder_name, 100)
                 return True
             
             self.progress_updated.emit(f"开始下载 {remote_file_count} 个文件...")
@@ -2554,7 +2558,7 @@ class DownloadThread(QThread):
                             
                             # 更新进度（即使没有变化也要更新，确保UI同步）
                             if progress != last_progress or local_file_count != last_local_count:
-                                self.current_progress_updated.emit(progress)
+                                self.task_progress_updated.emit(device, folder_name, progress)
                                 last_progress = progress
                                 last_local_count = local_file_count
                                 
@@ -2566,7 +2570,7 @@ class DownloadThread(QThread):
                         else:
                             # 如果远程文件数为0，显示0%进度
                             if last_progress != 0:
-                                self.current_progress_updated.emit(0)
+                                self.task_progress_updated.emit(device, folder_name, 0)
                                 last_progress = 0
                                 self.progress_updated.emit("下载进度: 0/0 文件 (0%)")
                                 print(f"[调试] 定时器: 远程文件数为0，设置进度为0%")
@@ -2584,13 +2588,13 @@ class DownloadThread(QThread):
                     
                     # 如果文件数量达到或接近目标，显示100%
                     if remote_file_count > 0 and final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
-                        self.current_progress_updated.emit(100)
+                        self.task_progress_updated.emit(device, folder_name, 100)
                         self.progress_updated.emit(f"下载完成: {final_local_count}/{remote_file_count} 文件 (100%)")
                         print(f"[调试] 定时器: 下载完成，显示100%进度")
                     else:
                         # 否则显示实际进度
                         final_progress = min(99, int((final_local_count / remote_file_count) * 100))
-                        self.current_progress_updated.emit(final_progress)
+                        self.task_progress_updated.emit(device, folder_name, final_progress)
                         self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
                         print(f"[调试] 定时器: 最终进度 {final_progress}%")
                 except Exception as e:
@@ -2630,7 +2634,7 @@ class DownloadThread(QThread):
                                     if len(parts) >= 2:
                                         transferred_files = int(parts[0])
                                         progress = min(99, int((transferred_files / remote_file_count) * 100))
-                                        self.current_progress_updated.emit(progress)
+                                        self.task_progress_updated.emit(device, folder_name, progress)
                                         self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
                                 except (ValueError, IndexError):
                                     pass
@@ -2661,7 +2665,7 @@ class DownloadThread(QThread):
                                     if len(parts) >= 2:
                                         transferred_files = int(parts[0])
                                         progress = min(99, int((transferred_files / remote_file_count) * 100))
-                                        self.current_progress_updated.emit(progress)
+                                        self.task_progress_updated.emit(device, folder_name, progress)
                                         self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
                                 except (ValueError, IndexError):
                                     pass
@@ -2672,7 +2676,7 @@ class DownloadThread(QThread):
                                     if len(parts) >= 2:
                                         transferred_files = int(parts[0])
                                         progress = min(99, int((transferred_files / remote_file_count) * 100))
-                                        self.current_progress_updated.emit(progress)
+                                        self.task_progress_updated.emit(device, folder_name, progress)
                                         self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
                                 except (ValueError, IndexError):
                                     pass
@@ -2698,11 +2702,11 @@ class DownloadThread(QThread):
                 
                 # 只有在定时器没有设置100%的情况下才设置
                 if final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
-                    self.current_progress_updated.emit(100)
+                    self.task_progress_updated.emit(device, folder_name, 100)
                     self.progress_updated.emit(f"✓ 下载完成，远程 {remote_file_count} 个文件，本地 {final_local_count} 个文件")
                 else:
                     final_progress = int((final_local_count / remote_file_count) * 100)
-                    self.current_progress_updated.emit(final_progress)
+                    self.task_progress_updated.emit(device, folder_name, final_progress)
                     self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
                 
                 return True
@@ -2793,11 +2797,7 @@ class DownloadThread(QThread):
             print(f"[调试] 统计本地文件数量时出错: {e}")
             return 0
     
-    def update_overall_progress(self):
-        """更新总体进度"""
-        if self.total_tasks > 0:
-            progress = int((self.completed_tasks / self.total_tasks) * 100)
-            self.overall_progress_updated.emit(progress)
+
 
 
 if __name__ == "__main__":
