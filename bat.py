@@ -802,6 +802,9 @@ class LogVerboseMaskApp(QWidget):
 
         def worker():
             try:
+                # 启动相机后等待3秒再开始拍摄
+                import time as _t
+                _t.sleep(3)
                 for i in range(1, total_shots + 1):
                     if self.capture_stop_event.is_set():
                         break
@@ -809,7 +812,6 @@ class LogVerboseMaskApp(QWidget):
                     while self.capture_pause_event.is_set():
                         if self.capture_stop_event.is_set():
                             break
-                        import time as _t
                         _t.sleep(0.1)
 
                     if self.capture_stop_event.is_set():
