@@ -2428,39 +2428,46 @@ class DownloadThread(QThread):
                 device_display_name = self.device_name_mapping.get(device, device)
                 self.progress_updated.emit(f"正在处理设备: {device_display_name}")
                 
-                # 创建设备子文件夹，使用自定义名称或原始ID
-                device_folder = os.path.join(timestamp_folder, device_display_name)
-                try:
-                    os.makedirs(device_folder, exist_ok=True)
-                except Exception as e:
-                    self.progress_updated.emit(f"无法创建设备文件夹: {str(e)}")
-                    failed_devices.append(device)
-                    continue
-                
                 if self.is_manual_mode:
-                    # 手动模式：下载选中的文件夹
+                    # 手动模式：按所选顶层文件夹分别创建目录: 日期/顶层文件夹/设备名
                     for folder in self.folders:
                         self.progress_updated.emit(f"正在下载文件夹: {folder}")
                         
                         # 发送任务开始信号
                         self.task_progress_updated.emit(device, folder, 0)
                         
-                        # 执行adb pull命令
-                        # 对于置顶文件夹，直接使用完整路径；对于手动选择的文件夹，添加/sdcard前缀
+                        # 规范化源路径
                         if folder.startswith("sdcard/") or folder.startswith("data/"):
                             source_path = f"/{folder}"
                         else:
                             source_path = f"/sdcard/{folder}"
                         
+                        # 目标目录: <dest>/<timestamp>/<top_folder_name>/<device_display_name>
+                        top_folder_name = os.path.basename(source_path.rstrip('/'))
+                        top_folder_dir = os.path.join(timestamp_folder, top_folder_name)
+                        try:
+                            os.makedirs(top_folder_dir, exist_ok=True)
+                        except Exception as e:
+                            self.progress_updated.emit(f"无法创建顶层文件夹 '{top_folder_name}': {str(e)}")
+                            failed_devices.append(device)
+                            continue
+                        
+                        device_folder = os.path.join(top_folder_dir, device_display_name)
+                        try:
+                            os.makedirs(device_folder, exist_ok=True)
+                        except Exception as e:
+                            self.progress_updated.emit(f"无法创建设备文件夹: {str(e)}")
+                            failed_devices.append(device)
+                            continue
+                        
+                        # 仅拉取目录内容，避免嵌套一层同名目录
                         result = self.execute_adb_pull(device, source_path, device_folder, folder)
                         
                         if result:
                             self.progress_updated.emit(f"✓ 文件夹 {folder} 下载成功")
-                            # 发送任务完成信号
                             self.task_progress_updated.emit(device, folder, 100)
                         else:
                             self.progress_updated.emit(f"✗ 文件夹 {folder} 下载失败")
-                            # 发送任务失败信号
                             self.task_progress_updated.emit(device, folder, 0)
                         
                         # 更新任务完成数
@@ -2513,12 +2520,11 @@ class DownloadThread(QThread):
             self.progress_updated.emit(f"开始下载 {remote_file_count} 个文件...")
             print(f"[调试] 远程路径 {source_path} 中有 {remote_file_count} 个文件")
             
-            # 获取目标文件夹路径（adb pull会在dest_path下创建与source_path同名的文件夹）
-            source_folder_name = os.path.basename(source_path.rstrip('/'))
-            local_download_path = os.path.join(dest_path, source_folder_name)
+            # 目标路径设为设备目录，直接将源目录内容拉入，避免多一层同名目录
+            local_download_path = dest_path
             
-            # 使用实时输出方式执行adb pull
-            command = f'adb -s {device} pull "{source_path}" "{dest_path}"'
+            # 使用实时输出方式执行adb pull（使用/.: 仅复制目录内容）
+            command = f'adb -s {device} pull "{source_path}/." "{dest_path}"'
             print(f"[调试] 执行命令: {command}")
             print(f"[调试] 目标本地路径: {local_download_path}")
             
