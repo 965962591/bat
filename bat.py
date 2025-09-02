@@ -2088,9 +2088,11 @@ class FileDownloadDialog(QDialog):
 
     def start_download(self):
         """开始下载"""
-        # 重置进度条
+        # 重置进度条和状态
         self.overall_progress_bar.setValue(0)
         self.current_progress_bar.setValue(0)
+        self.progress_label.setText("正在准备下载...")
+        self.progress_label.setStyleSheet("color: #3498db; font-weight: bold;")
         
         # 获取选中的设备（使用原始设备ID）
         selected_devices = []
@@ -2237,20 +2239,18 @@ class FileDownloadDialog(QDialog):
         """下载完成处理"""
         self.download_btn.setEnabled(True)
         
-        # 重置进度条
-        self.overall_progress_bar.setValue(100)
-        self.current_progress_bar.setValue(100)
-        
-        if failed_devices:
-            failed_list = "\n".join([f"• {device}" for device in failed_devices])
-            message = f"下载完成！\n\n成功: {success_count}/{total_count}\n\n失败的设备:\n{failed_list}"
-            QMessageBox.information(self, "下载结果", message)
+        # 显示下载完成状态，但不强制设置进度条为100%
+        # 让进度条保持实际的完成状态
+        if success_count == total_count:
+            # 所有设备都成功完成
+            self.overall_progress_bar.setValue(100)
+            self.current_progress_bar.setValue(100)
+            self.progress_label.setText("所有下载任务已完成")
+            self.progress_label.setStyleSheet("color: #27ae60; font-weight: bold;")
         else:
-            message = f"下载完成！\n\n所有 {total_count} 台设备都下载成功！"
-            QMessageBox.information(self, "下载结果", message)
-        
-        self.progress_label.setText("下载完成")
-        self.progress_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+            # 部分设备失败
+            self.progress_label.setText(f"下载完成：{success_count}/{total_count} 台设备成功")
+            self.progress_label.setStyleSheet("color: #f39c12; font-weight: bold;")
         
 
 
@@ -2364,7 +2364,9 @@ class DownloadThread(QThread):
         
         # 初始化进度
         self.completed_tasks = 0
-        self.update_overall_progress()
+        # 发送初始进度信号，确保进度条从0开始
+        self.overall_progress_updated.emit(0)
+        self.current_progress_updated.emit(0)
         
         # 检查目标路径是否存在
         if not os.path.exists(self.dest_path):
@@ -2466,15 +2468,24 @@ class DownloadThread(QThread):
                 startupinfo.wShowWindow = subprocess.SW_HIDE
             
             # 首先获取源文件夹中的文件数量，用于计算进度
-            file_count = self.get_file_count(device, source_path)
-            if file_count == 0:
+            remote_file_count = self.get_file_count(device, source_path)
+            if remote_file_count == 0:
                 self.progress_updated.emit(f"警告: 源路径 {source_path} 中没有文件")
+                # 设置当前任务进度为100%（因为没有文件需要下载）
+                self.current_progress_updated.emit(100)
                 return True
             
-            self.progress_updated.emit(f"开始下载 {file_count} 个文件...")
+            self.progress_updated.emit(f"开始下载 {remote_file_count} 个文件...")
+            print(f"[调试] 远程路径 {source_path} 中有 {remote_file_count} 个文件")
+            
+            # 获取目标文件夹路径（adb pull会在dest_path下创建与source_path同名的文件夹）
+            source_folder_name = os.path.basename(source_path.rstrip('/'))
+            local_download_path = os.path.join(dest_path, source_folder_name)
             
             # 使用实时输出方式执行adb pull
             command = f'adb -s {device} pull "{source_path}" "{dest_path}"'
+            print(f"[调试] 执行命令: {command}")
+            print(f"[调试] 目标本地路径: {local_download_path}")
             
             # 创建进程，实时获取输出
             process = subprocess.Popen(
@@ -2487,46 +2498,186 @@ class DownloadThread(QThread):
                 startupinfo=startupinfo,
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
             )
+            print(f"[调试] 进程已启动，PID: {process.pid}")
             
-            # 实时读取输出
+            # 实时读取输出并监控本地文件数量
             transferred_files = 0
+            last_progress = 0
+            last_local_count = 0
+            
+            # 使用定时器检查本地文件数量
+            import threading
+            import time
+            
+            def check_local_files():
+                """定时检查本地文件数量的函数"""
+                nonlocal last_progress, last_local_count
+                while process.poll() is None:  # 进程还在运行时
+                    try:
+                        local_file_count = self.get_local_file_count(local_download_path)
+                        print(f"[调试] 定时器检查本地文件数量: {local_file_count}")
+                        
+                        # 计算进度百分比，但不超过99%（避免在下载完成前显示100%）
+                        if remote_file_count > 0:
+                            progress = min(99, int((local_file_count / remote_file_count) * 100))
+                            
+                            # 更新进度（即使没有变化也要更新，确保UI同步）
+                            if progress != last_progress or local_file_count != last_local_count:
+                                self.current_progress_updated.emit(progress)
+                                last_progress = progress
+                                last_local_count = local_file_count
+                                
+                                # 显示详细进度信息
+                                self.progress_updated.emit(f"下载进度: {local_file_count}/{remote_file_count} 文件 ({progress}%)")
+                                print(f"[调试] 定时器进度更新: 本地 {local_file_count}/{remote_file_count} 文件 ({progress}%)")
+                            else:
+                                print(f"[调试] 定时器进度无变化: 本地 {local_file_count}/{remote_file_count} 文件 ({progress}%)")
+                        else:
+                            # 如果远程文件数为0，显示0%进度
+                            if last_progress != 0:
+                                self.current_progress_updated.emit(0)
+                                last_progress = 0
+                                self.progress_updated.emit("下载进度: 0/0 文件 (0%)")
+                                print(f"[调试] 定时器: 远程文件数为0，设置进度为0%")
+                    except Exception as e:
+                        print(f"[调试] 定时器检查文件数量时出错: {e}")
+                    
+                    # 每0.5秒检查一次
+                    time.sleep(0.5)
+                
+                # 进程结束后，再检查一次最终的文件数量
+                print(f"[调试] 进程已结束，进行最终检查...")
+                try:
+                    final_local_count = self.get_local_file_count(local_download_path)
+                    print(f"[调试] 最终本地文件数量: {final_local_count}")
+                    
+                    # 如果文件数量达到或接近目标，显示100%
+                    if remote_file_count > 0 and final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
+                        self.current_progress_updated.emit(100)
+                        self.progress_updated.emit(f"下载完成: {final_local_count}/{remote_file_count} 文件 (100%)")
+                        print(f"[调试] 定时器: 下载完成，显示100%进度")
+                    else:
+                        # 否则显示实际进度
+                        final_progress = min(99, int((final_local_count / remote_file_count) * 100))
+                        self.current_progress_updated.emit(final_progress)
+                        self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
+                        print(f"[调试] 定时器: 最终进度 {final_progress}%")
+                except Exception as e:
+                    print(f"[调试] 定时器最终检查时出错: {e}")
+            
+            # 启动定时器线程
+            timer_thread = threading.Thread(target=check_local_files, daemon=True)
+            timer_thread.start()
+            print(f"[调试] 定时器线程已启动")
+            
+            # 使用非阻塞方式读取输出
+            import select
+            
+            loop_count = 0
             while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
+                loop_count += 1
+                # 检查进程是否结束
+                if process.poll() is not None:
+                    print(f"[调试] 进程已结束，返回码: {process.returncode}")
                     break
-                if output:
-                    output = output.strip()
-                    # 解析adb pull的输出，查找文件传输信息
-                    if output.endswith(' files pulled') or 'files pulled' in output:
-                        # 提取传输的文件数量
-                        try:
-                            parts = output.split()
-                            if len(parts) >= 2:
-                                transferred_files = int(parts[0])
-                                progress = min(100, int((transferred_files / file_count) * 100))
-                                self.current_progress_updated.emit(progress)
-                        except (ValueError, IndexError):
-                            pass
-                    elif 'pulled' in output and 'files' in output:
-                        # 另一种输出格式
-                        try:
-                            parts = output.split()
-                            if len(parts) >= 2:
-                                transferred_files = int(parts[0])
-                                progress = min(100, int((transferred_files / file_count) * 100))
-                                self.current_progress_updated.emit(progress)
-                        except (ValueError, IndexError):
-                            pass
+                
+                # 检查是否有输出可读
+                if hasattr(select, 'select'):
+                    # Unix/Linux系统
+                    ready, _, _ = select.select([process.stdout], [], [], 0.1)
+                    if ready:
+                        output = process.stdout.readline()
+                        if output:
+                            output = output.strip()
+                            print(f"[调试] 收到adb输出: {output}")
+                            
+                            # 解析adb pull的输出，查找文件传输信息
+                            if output.endswith(' files pulled') or 'files pulled' in output:
+                                # 提取传输的文件数量
+                                try:
+                                    parts = output.split()
+                                    if len(parts) >= 2:
+                                        transferred_files = int(parts[0])
+                                        progress = min(99, int((transferred_files / remote_file_count) * 100))
+                                        self.current_progress_updated.emit(progress)
+                                        self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
+                                except (ValueError, IndexError):
+                                    pass
+                            elif 'pulled' in output and 'files' in output:
+                                # 另一种输出格式
+                                try:
+                                    parts = output.split()
+                                    if len(parts) >= 2:
+                                        transferred_files = int(parts[0])
+                                        progress = min(99, int((transferred_files / remote_file_count) * 100))
+                                        self.current_progress_updated.emit(progress)
+                                        self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
+                                except (ValueError, IndexError):
+                                    pass
+                else:
+                    # Windows系统，使用简单的非阻塞读取
+                    try:
+                        output = process.stdout.readline()
+                        if output:
+                            output = output.strip()
+                            print(f"[调试] 收到adb输出(Windows): {output}")
+                            
+                            # 解析adb pull的输出，查找文件传输信息
+                            if output.endswith(' files pulled') or 'files pulled' in output:
+                                # 提取传输的文件数量
+                                try:
+                                    parts = output.split()
+                                    if len(parts) >= 2:
+                                        transferred_files = int(parts[0])
+                                        progress = min(99, int((transferred_files / remote_file_count) * 100))
+                                        self.current_progress_updated.emit(progress)
+                                        self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
+                                except (ValueError, IndexError):
+                                    pass
+                            elif 'pulled' in output and 'files' in output:
+                                # 另一种输出格式
+                                try:
+                                    parts = output.split()
+                                    if len(parts) >= 2:
+                                        transferred_files = int(parts[0])
+                                        progress = min(99, int((transferred_files / remote_file_count) * 100))
+                                        self.current_progress_updated.emit(progress)
+                                        self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
+                                except (ValueError, IndexError):
+                                    pass
+                    except:
+                        pass
+                
+                # 短暂休眠，避免CPU占用过高
+                time.sleep(0.1)
             
             # 等待进程完成
+            print(f"[调试] 等待进程完成...")
             return_code = process.wait()
+            print(f"[调试] 进程完成，返回码: {return_code}")
             
             if return_code == 0:
-                self.current_progress_updated.emit(100)
-                self.progress_updated.emit(f"✓ 下载完成，共传输 {transferred_files} 个文件")
+                # 等待定时器线程完成最终检查
+                print(f"[调试] 等待定时器线程完成最终检查...")
+                timer_thread.join(timeout=2)  # 等待最多2秒
+                
+                # 最终检查本地文件数量
+                final_local_count = self.get_local_file_count(local_download_path)
+                print(f"[调试] 主线程最终检查，本地文件数量: {final_local_count}")
+                
+                # 只有在定时器没有设置100%的情况下才设置
+                if final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
+                    self.current_progress_updated.emit(100)
+                    self.progress_updated.emit(f"✓ 下载完成，远程 {remote_file_count} 个文件，本地 {final_local_count} 个文件")
+                else:
+                    final_progress = int((final_local_count / remote_file_count) * 100)
+                    self.current_progress_updated.emit(final_progress)
+                    self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
+                
                 return True
             else:
                 error_output = process.stderr.read()
+                print(f"[调试] 下载失败，错误输出: {error_output}")
                 self.progress_updated.emit(f"✗ 下载失败: {error_output}")
                 return False
                 
@@ -2543,8 +2694,8 @@ class DownloadThread(QThread):
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
             
-            # 使用adb shell find命令统计文件数量
-            command = f'adb -s {device} shell "find {source_path} -type f | wc -l"'
+            # 使用adb shell find命令统计文件数量，只统计非空文件
+            command = f'adb -s {device} shell "find {source_path} -type f -size +0c | wc -l"'
             result = subprocess.run(
                 command,
                 shell=True,
@@ -2557,13 +2708,58 @@ class DownloadThread(QThread):
             
             if result.returncode == 0:
                 try:
-                    return int(result.stdout.strip())
+                    count = int(result.stdout.strip())
+                    return count if count > 0 else 0
                 except ValueError:
                     return 0
             else:
-                return 0
+                # 如果上面的命令失败，尝试简单的find命令
+                command = f'adb -s {device} shell "find {source_path} -type f | wc -l"'
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
+                
+                if result.returncode == 0:
+                    try:
+                        return int(result.stdout.strip())
+                    except ValueError:
+                        return 0
+                else:
+                    return 0
                 
         except Exception:
+            return 0
+    
+    def get_local_file_count(self, local_path):
+        """获取本地文件夹中的文件数量"""
+        try:
+            if not os.path.exists(local_path):
+                print(f"[调试] 本地路径不存在: {local_path}")
+                return 0
+            
+            file_count = 0
+            total_files = 0
+            for root, dirs, files in os.walk(local_path):
+                total_files += len(files)
+                # 只统计文件，不包括目录
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    # 检查文件是否存在且不为空（避免统计正在写入的文件）
+                    if os.path.isfile(file_path) and os.path.getsize(file_path) > 0:
+                        file_count += 1
+            
+            if file_count != total_files:
+                print(f"[调试] 本地路径 {local_path}: 总文件数 {total_files}, 有效文件数 {file_count}")
+            
+            return file_count
+        except Exception as e:
+            print(f"[调试] 统计本地文件数量时出错: {e}")
             return 0
     
     def update_overall_progress(self):
