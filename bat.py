@@ -1232,11 +1232,6 @@ class LogVerboseMaskApp(QWidget):
 
                 generated_bat_files.append((bat_path, device_display_name))
                 
-                # 添加1秒延时（除了最后一个设备）
-                if i < len(devices) - 1:
-                    import time
-                    time.sleep(1)
-                
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"为设备 {device} 生成脚本时出错：\n{str(e)}")
                 continue
