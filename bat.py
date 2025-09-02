@@ -537,6 +537,11 @@ class LogVerboseMaskApp(QWidget):
         add_button = QPushButton("新增")
         add_button.clicked.connect(self.add_new_script)
         button_layout.addWidget(add_button)
+        
+        # 创建原生运行按钮
+        native_run_button = QPushButton("原生运行")
+        native_run_button.clicked.connect(self.native_run_script)
+        button_layout.addWidget(native_run_button)
         # 将按钮布局添加到主布局
         main_layout.addLayout(button_layout)
 
@@ -1114,6 +1119,184 @@ class LogVerboseMaskApp(QWidget):
                 self.layout().addWidget(new_checkbox)
                 # 重新排列命令复选框
                 self.rearrange_command_checkboxes()
+
+    def native_run_script(self):
+        """原生运行：生成bat文件并直接运行"""
+        # 首先检查设备连接状态
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+        
+        # 检查设备是否仍然连接
+        try:
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            result = subprocess.run(
+                ['adb', 'devices'], 
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')[1:]
+                devices = []
+                for line in lines:
+                    if line.strip() and '\t' in line:
+                        device_id, status = line.strip().split('\t')
+                        if status == 'device':
+                            devices.append(device_id)
+                
+                if selected_device not in devices:
+                    QMessageBox.warning(self, "设备错误", f"设备 {selected_device} 已断开连接，请重新选择设备！")
+                    self.refresh_devices()
+                    return
+            else:
+                QMessageBox.warning(self, "ADB错误", "无法获取设备列表，请检查ADB连接！")
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "ADB错误", f"检查设备状态时出错: {str(e)}")
+            return
+
+        # 收集所有要执行的命令
+        all_commands = []
+
+        # ADB初始化命令（指定设备）
+        all_commands.extend([
+            f"adb -s {selected_device} root", 
+            f"adb -s {selected_device} remount", 
+            f"adb -s {selected_device} wait-for-device"
+        ])
+
+        # 添加文本框中的命令（指定设备）
+        text_edit_commands = self.mask_display.toPlainText().split("\n")
+        for cmd in text_edit_commands:
+            if cmd.strip():
+                if cmd.startswith("adb shell"):
+                    # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
+                    new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
+                    all_commands.append(new_cmd)
+                elif cmd.startswith("adb "):
+                    # 对所有其他 adb 命令添加设备号
+                    new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
+                    all_commands.append(new_cmd)
+                else:
+                    all_commands.append(cmd)
+
+        # 添加特定命令（指定设备）
+        for checkbox in self.command_checkboxes:
+            if checkbox.isChecked() and checkbox.text() in self.specific_commands:
+                for cmd in self.specific_commands[checkbox.text()]:
+                    if cmd.startswith("adb shell"):
+                        # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
+                        new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
+                        all_commands.append(new_cmd)
+                    elif cmd.startswith("adb "):
+                        # 对所有其他 adb 命令添加设备号
+                        new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
+                        all_commands.append(new_cmd)
+                    else:
+                        all_commands.append(cmd)
+
+        # 添加查看配置文件的命令（指定设备）
+        all_commands.append(
+            f"adb -s {selected_device} shell cat /vendor/etc/camera/camxoverridesettings.txt"
+        )
+
+        # 生成bat文件
+        import tempfile
+        import datetime
+        
+        # 创建带时间戳的文件名
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        device_display_name = self.get_device_display_name(selected_device)
+        bat_filename = f"bat_script_{device_display_name}_{timestamp}.bat"
+        
+        # 确保缓存目录存在
+        os.makedirs(APP_CACHE_DIR, exist_ok=True)
+        bat_path = os.path.join(APP_CACHE_DIR, bat_filename)
+        
+        try:
+            # 创建bat文件（使用ANSI编码，避免中文乱码）
+            with open(bat_path, "w", encoding="gbk") as f:
+                f.write("@echo off\n")
+                f.write("chcp 936 >nul\n")  # 设置GBK编码，支持中文显示
+                f.write("title Bat脚本执行 - {device_display_name}\n")  # 设置窗口标题
+                f.write("color 0A\n")  # 设置颜色：黑底绿字
+                f.write("echo ========================================\n")
+                f.write("echo            Bat脚本执行器\n")
+                f.write("echo ========================================\n")
+                f.write("echo.\n")
+                f.write(f"echo [INFO] 目标设备: {selected_device}\n")
+                f.write(f"echo [INFO] 设备显示名称: {device_display_name}\n")
+                f.write(f"echo [INFO] 脚本生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("echo [INFO] 开始执行脚本...\n")
+                f.write("echo.\n")
+                f.write("echo ========================================\n")
+                f.write("echo            执行命令列表\n")
+                f.write("echo ========================================\n")
+                f.write("\n".join(all_commands))
+                f.write("\necho.\n")
+                f.write("echo ========================================\n")
+                f.write("echo            执行完成\n")
+                f.write("echo ========================================\n")
+                f.write("echo.\n")
+                f.write("echo 按任意键关闭窗口...\n")
+                f.write("pause >nul\n")  # 静默暂停，不显示"请按任意键继续..."
+            
+            # 显示成功消息
+            QMessageBox.information(self, "脚本生成成功", 
+                                  f"bat脚本已生成：\n{bat_path}\n\n即将运行此脚本...")
+            
+            # 直接运行bat文件（调用Windows cmd窗口）
+            # 使用os.startfile直接打开bat文件，这样会使用系统默认的cmd窗口
+            try:
+                # 方法1：使用os.startfile直接打开bat文件（推荐）
+                os.startfile(bat_path)
+            except Exception as e:
+                # 方法2：如果os.startfile失败，使用subprocess调用cmd
+                try:
+                    startupinfo = None
+                    if hasattr(subprocess, 'STARTUPINFO'):
+                        startupinfo = subprocess.STARTUPINFO()
+                        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                        startupinfo.wShowWindow = 1  # 1 = SW_SHOW，显示窗口
+                    
+                    # 使用线程异步执行，避免阻塞主界面
+                    def run_bat_async():
+                        try:
+                            # 使用cmd /k 保持窗口打开，让用户看到执行结果
+                            subprocess.run(
+                                f'cmd /k "{bat_path}"', 
+                                shell=True,
+                                startupinfo=startupinfo
+                            )
+                        except Exception as e:
+                            print(f"运行bat脚本时出错: {e}")
+                    
+                    # 创建并启动线程
+                    import threading
+                    bat_thread = threading.Thread(target=run_bat_async)
+                    bat_thread.daemon = True  # 设置为守护线程
+                    bat_thread.start()
+                    
+                except Exception as subprocess_error:
+                    print(f"subprocess调用失败: {subprocess_error}")
+                    # 方法3：最后的备选方案，使用start命令
+                    try:
+                        os.system(f'start "{bat_filename}" "{bat_path}"')
+                    except Exception as start_error:
+                        print(f"start命令也失败: {start_error}")
+                        QMessageBox.warning(self, "警告", f"无法自动运行bat脚本，请手动运行：\n{bat_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"生成或运行bat脚本时出错：\n{str(e)}")
 
     def delete_command(self, checkbox):
         command_key = checkbox.text()
