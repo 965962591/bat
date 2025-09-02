@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QComboBox,
     QProgressBar,
+    QSpinBox,
 )
 from PyQt5.QtWidgets import QScrollArea
 import subprocess
@@ -563,7 +564,7 @@ class LogVerboseMaskApp(QWidget):
 
         # 创建设备选择区域
         device_layout = QHBoxLayout()
-        device_label = QLabel("选择设备:")
+        device_label = QLabel("设备:")
         device_label.setToolTip("选择设备需要执行的设备")
         self.device_combo = QComboBox()
         refresh_button = QPushButton("刷新")
@@ -571,7 +572,7 @@ class LogVerboseMaskApp(QWidget):
         refresh_button.clicked.connect(self.refresh_devices)
         
         # 添加编辑设备名称按钮
-        edit_device_button = QPushButton("编辑设备名称")
+        edit_device_button = QPushButton("编辑名称")
         edit_device_button.setToolTip("自定义设备名称")
         edit_device_button.clicked.connect(self.edit_current_device_name)
         
@@ -583,11 +584,27 @@ class LogVerboseMaskApp(QWidget):
         file_transfer_button.setToolTip("文件传输模式，可以进行文件传输")
         photo_transfer_button = QPushButton("传输照片")
         photo_transfer_button.setToolTip("传输照片模式，可以进行照片传输")
-        kuajie_label = QLabel("快速功能:")
+        kuajie_label = QLabel("快捷:")
         camera_button = QPushButton("拍照")
         camera_button.setToolTip("启动相机后点击拍照")
         screenshot_button = QPushButton("截屏")
         screenshot_button.setToolTip("截图路径/sdcard/Pictures/Screenshots/")
+
+        # 批量拍摄控件：数量、间隔、拍摄、暂停/继续
+        capture_count_label = QLabel("数量:")
+        self.capture_count_spin = QSpinBox()
+        self.capture_count_spin.setRange(1, 100000)
+        self.capture_count_spin.setValue(10)
+
+        capture_interval_label = QLabel("间隔(秒):")
+        self.capture_interval_spin = QSpinBox()
+        self.capture_interval_spin.setRange(1, 3600)
+        self.capture_interval_spin.setValue(1)
+
+        self.capture_start_btn = QPushButton("拍摄")
+        self.capture_start_btn.setToolTip("按数量与间隔进行批量拍摄")
+        self.capture_pause_btn = QPushButton("暂停/继续")
+        self.capture_pause_btn.setEnabled(False)
 
         # 连接按钮信号
         only_charge_button.clicked.connect(lambda: self.switch_usb_mode("仅充电", ""))
@@ -595,6 +612,8 @@ class LogVerboseMaskApp(QWidget):
         photo_transfer_button.clicked.connect(lambda: self.switch_usb_mode("传输照片", "ptp"))
         camera_button.clicked.connect(self.take_photo)
         screenshot_button.clicked.connect(self.take_screenshot)
+        self.capture_start_btn.clicked.connect(self.start_batch_capture)
+        self.capture_pause_btn.clicked.connect(self.toggle_capture_pause)
         
         device_layout.addWidget(device_label)
         device_layout.addWidget(self.device_combo)
@@ -607,6 +626,12 @@ class LogVerboseMaskApp(QWidget):
         device_layout.addWidget(kuajie_label)
         device_layout.addWidget(camera_button)
         device_layout.addWidget(screenshot_button)
+        device_layout.addWidget(capture_count_label)
+        device_layout.addWidget(self.capture_count_spin)
+        device_layout.addWidget(capture_interval_label)
+        device_layout.addWidget(self.capture_interval_spin)
+        device_layout.addWidget(self.capture_start_btn)
+        device_layout.addWidget(self.capture_pause_btn)
         device_layout.addStretch()  # 添加弹性空间
         
         main_layout.addLayout(device_layout)
@@ -729,6 +754,118 @@ class LogVerboseMaskApp(QWidget):
 
         main_layout.addLayout(grid_layout)
         self.setLayout(main_layout)
+
+        # 批量拍摄状态变量
+        self.capture_thread = None
+        self.capture_stop_event = threading.Event()
+        self.capture_pause_event = threading.Event()
+        self.capture_running = False
+
+    def _hidden_startupinfo(self):
+        startupinfo = None
+        if hasattr(subprocess, 'STARTUPINFO'):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+        return startupinfo
+
+    def start_batch_capture(self):
+        """按照数量和间隔执行批量拍摄（单设备）。"""
+        if self.capture_running:
+            return
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        total_shots = self.capture_count_spin.value()
+        interval_seconds = max(1, self.capture_interval_spin.value())
+
+        # 启动相机
+        try:
+            start_cmd = f"adb -s {selected_device} shell am start -a android.media.action.STILL_IMAGE_CAMERA"
+            subprocess.run(
+                start_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=self._hidden_startupinfo(),
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "启动失败", f"无法启动相机: {e}")
+            return
+
+        self.capture_stop_event.clear()
+        self.capture_pause_event.clear()
+
+        def worker():
+            try:
+                for i in range(1, total_shots + 1):
+                    if self.capture_stop_event.is_set():
+                        break
+                    # 暂停控制
+                    while self.capture_pause_event.is_set():
+                        if self.capture_stop_event.is_set():
+                            break
+                        import time as _t
+                        _t.sleep(0.1)
+
+                    if self.capture_stop_event.is_set():
+                        break
+
+                    # 拍照
+                    command = f"adb -s {selected_device} shell input keyevent 27"
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8',
+                        startupinfo=self._hidden_startupinfo(),
+                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                    )
+                    if result.returncode != 0:
+                        err = result.stderr.strip() if result.stderr else "未知错误"
+                        print(f"批量拍摄失败: {err}")
+                        break
+
+                    print(f"批量拍摄 {i}/{total_shots}")
+
+                    # 等待间隔（最后一张不等待）
+                    if i < total_shots:
+                        import time as _t
+                        for _ in range(interval_seconds * 10):
+                            if self.capture_stop_event.is_set():
+                                break
+                            while self.capture_pause_event.is_set():
+                                if self.capture_stop_event.is_set():
+                                    break
+                                _t.sleep(0.1)
+                            if self.capture_stop_event.is_set():
+                                break
+                            _t.sleep(0.1)
+            finally:
+                # 结束状态恢复
+                self.capture_running = False
+                QMetaObject.invokeMethod(self.capture_pause_btn, "setEnabled", Qt.QueuedConnection, Q_ARG(bool, False))
+                QMetaObject.invokeMethod(self.capture_start_btn, "setEnabled", Qt.QueuedConnection, Q_ARG(bool, True))
+
+        self.capture_thread = threading.Thread(target=worker, daemon=True)
+        self.capture_running = True
+        self.capture_start_btn.setEnabled(False)
+        self.capture_pause_btn.setEnabled(True)
+        self.capture_thread.start()
+
+    def toggle_capture_pause(self):
+        """切换批量拍摄暂停与继续。"""
+        if not self.capture_running:
+            return
+        if self.capture_pause_event.is_set():
+            self.capture_pause_event.clear()
+        else:
+            self.capture_pause_event.set()
 
     def update_script_mask(self):
         """更新 script_label 下的复选框"""
