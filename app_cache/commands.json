@@ -56,6 +56,13 @@
     "adb pull": [
         "adb root",
         "adb remount",
-        "adb pull sdcard/dcim/camera/ C:\\Users\\chenyang3\\Pictures\\test"
+        "timeout /t 1 >nul",
+        "timeout /t 1 >nul",
+        "ping 127.0.0.1 -n 2 >nul",
+        "set \"FOLDER=%date:~0,4%%date:~5,2%%date:~8,2%_%time:~0,2%%time:~3,2%%time:~6,2%\"",
+        "echo %FOLDER%",
+        "md \"%FOLDER%\" 2>nul",
+        "cd \"%FOLDER%",
+        "adb pull sdcard/dcim/camera/"
     ]
 }

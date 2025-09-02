@@ -1121,14 +1121,8 @@ class LogVerboseMaskApp(QWidget):
                 self.rearrange_command_checkboxes()
 
     def native_run_script(self):
-        """原生运行：生成bat文件并直接运行"""
-        # 首先检查设备连接状态
-        selected_device = self.get_selected_device()
-        if not selected_device:
-            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
-            return
-        
-        # 检查设备是否仍然连接
+        """原生运行：检查所有已连接设备，为每个设备生成bat脚本并同时执行"""
+        # 检查所有已连接的设备
         try:
             startupinfo = None
             if hasattr(subprocess, 'STARTUPINFO'):
@@ -1153,9 +1147,8 @@ class LogVerboseMaskApp(QWidget):
                         if status == 'device':
                             devices.append(device_id)
                 
-                if selected_device not in devices:
-                    QMessageBox.warning(self, "设备错误", f"设备 {selected_device} 已断开连接，请重新选择设备！")
-                    self.refresh_devices()
+                if not devices:
+                    QMessageBox.warning(self, "设备错误", "未检测到任何已连接的ADB设备！")
                     return
             else:
                 QMessageBox.warning(self, "ADB错误", "无法获取设备列表，请检查ADB连接！")
@@ -1164,112 +1157,108 @@ class LogVerboseMaskApp(QWidget):
             QMessageBox.warning(self, "ADB错误", f"检查设备状态时出错: {str(e)}")
             return
 
-        # 收集所有要执行的命令
-        all_commands = []
-
-        # ADB初始化命令（指定设备）
-        all_commands.extend([
-            f"adb -s {selected_device} root", 
-            f"adb -s {selected_device} remount", 
-            f"adb -s {selected_device} wait-for-device"
-        ])
-
-        # 使用集合来避免重复命令
-        unique_commands = set()
-
-        # 添加文本框中的命令（指定设备）
-        text_edit_commands = self.mask_display.toPlainText().split("\n")
-        for cmd in text_edit_commands:
-            if cmd.strip():
-                if cmd.startswith("adb shell"):
-                    # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
-                    new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
-                    unique_commands.add(new_cmd)
-                elif cmd.startswith("adb "):
-                    # 对所有其他 adb 命令添加设备号
-                    new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
-                    unique_commands.add(new_cmd)
-                else:
-                    unique_commands.add(cmd)
-
-        # 添加特定命令（指定设备）
-        for checkbox in self.command_checkboxes:
-            if checkbox.isChecked() and checkbox.text() in self.specific_commands:
-                for cmd in self.specific_commands[checkbox.text()]:
-                    if cmd.startswith("adb shell"):
-                        # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
-                        new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
-                        unique_commands.add(new_cmd)
-                    elif cmd.startswith("adb "):
-                        # 对所有其他 adb 命令添加设备号
-                        new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
-                        unique_commands.add(new_cmd)
-                    else:
-                        unique_commands.add(cmd)
-
-        # 将集合转换为列表，保持顺序
-        all_commands = list(unique_commands)
-
-        # 添加查看配置文件的命令（指定设备）
-        all_commands.append(
-            f"adb -s {selected_device} shell cat /vendor/etc/camera/camxoverridesettings.txt"
+        # 显示确认对话框
+        device_list = "\n".join([f"• {self.get_device_display_name(device)} ({device})" for device in devices])
+        reply = QMessageBox.question(
+            self, 
+            "原生运行确认", 
+            f"检测到 {len(devices)} 台设备:\n{device_list}\n\n确定要为所有设备生成并执行脚本吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
+        
+        if reply != QMessageBox.Yes:
+            return
 
-        # 生成bat文件
-        import tempfile
-        import datetime
+        # 为每个设备生成bat脚本并同时执行
+        generated_bat_files = []
         
-        # 创建带时间戳的文件名
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        device_display_name = self.get_device_display_name(selected_device)
-        bat_filename = f"bat_script_{device_display_name}_{timestamp}.bat"
-        
-        # 确保缓存目录存在
-        os.makedirs(APP_CACHE_DIR, exist_ok=True)
-        bat_path = os.path.join(APP_CACHE_DIR, bat_filename)
-        
-        try:
-            # 创建bat文件（使用ANSI编码，避免中文乱码）
-            with open(bat_path, "w", encoding="gbk") as f:
-                f.write("@echo off\n")
-                f.write("chcp 936 >nul\n")  # 设置GBK编码，支持中文显示
-                f.write("title Bat脚本执行 - {device_display_name}\n")  # 设置窗口标题
-                f.write("color 0A\n")  # 设置颜色：黑底绿字
-                f.write("echo ========================================\n")
-                f.write("echo            Bat脚本执行器\n")
-                f.write("echo ========================================\n")
-                f.write("echo.\n")
-                f.write(f"echo [INFO] 目标设备: {selected_device}\n")
-                f.write(f"echo [INFO] 设备显示名称: {device_display_name}\n")
-                f.write(f"echo [INFO] 脚本生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("echo [INFO] 开始执行脚本...\n")
-                f.write("echo.\n")
-                f.write("echo ========================================\n")
-                f.write("echo            执行命令列表\n")
-                f.write("echo ========================================\n")
-                f.write("\n".join(all_commands))
-                f.write("\necho.\n")
-                f.write("echo ========================================\n")
-                f.write("echo            执行完成\n")
-                f.write("echo ========================================\n")
-                f.write("echo.\n")
-                f.write("echo 按任意键关闭窗口...\n")
-                f.write("pause >nul\n")  # 静默暂停，不显示"请按任意键继续..."
-            
-            # 显示成功消息
-            QMessageBox.information(self, "脚本生成成功", 
-                                  f"bat脚本已生成：\n{bat_path}\n\n即将运行此脚本...")
-            
-            # 直接运行bat文件（调用Windows cmd窗口）
+        for i, device in enumerate(devices):
+            try:
+                # 收集所有要执行的命令
+                all_commands = []
+
+                # 只添加文本框中的命令（保持原有顺序）
+                text_edit_commands = self.mask_display.toPlainText().split("\n")
+                for cmd in text_edit_commands:
+                    if cmd.strip():
+                        if cmd.startswith("adb shell"):
+                            # 将 "adb shell" 替换为 "adb -s {device} shell"
+                            new_cmd = cmd.replace("adb shell", f"adb -s {device} shell")
+                            all_commands.append(new_cmd)
+                        elif cmd.startswith("adb "):
+                            # 对所有其他 adb 命令添加设备号
+                            new_cmd = cmd.replace("adb ", f"adb -s {device} ", 1)
+                            all_commands.append(new_cmd)
+                        else:
+                            all_commands.append(cmd)
+                import datetime
+                
+                # 创建带时间戳的文件名
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                device_display_name = self.get_device_display_name(device)
+                bat_filename = f"bat_script_{device_display_name}_{timestamp}.bat"
+                
+                # 确保缓存目录存在
+                os.makedirs(APP_CACHE_DIR, exist_ok=True)
+                bat_path = os.path.join(APP_CACHE_DIR, bat_filename)
+                
+                # 创建bat文件（使用GBK编码，避免中文乱码）
+                with open(bat_path, "w", encoding="gbk") as f:
+                    f.write("@echo off\n")
+                    f.write("chcp 936 >nul\n")  # 设置GBK编码，支持中文显示
+                    f.write(f"title Bat脚本执行 - {device_display_name}\n")  # 设置窗口标题
+                    f.write("color 0A\n")  # 设置颜色：黑底绿字
+                    f.write("echo ========================================\n")
+                    f.write("echo            Bat脚本执行器\n")
+                    f.write("echo ========================================\n")
+                    f.write("echo.\n")
+                    f.write(f"echo [INFO] 目标设备: {device}\n")
+                    f.write(f"echo [INFO] 设备显示名称: {device_display_name}\n")
+                    f.write(f"echo [INFO] 脚本生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("echo [INFO] 开始执行脚本...\n")
+                    f.write("echo.\n")
+                    f.write("echo ========================================\n")
+                    f.write("echo            执行命令列表\n")
+                    f.write("echo ========================================\n")
+                    f.write("\n".join(all_commands))
+                    f.write("\necho.\n")
+                    f.write("echo ========================================\n")
+                    f.write("echo            执行完成\n")
+                    f.write("echo ========================================\n")
+                    f.write("echo.\n")
+                    f.write("echo 按任意键关闭窗口...\n")
+                    f.write("pause\n")  # 显示"请按任意键继续..."，确保窗口不会立即关闭
+
+                generated_bat_files.append((bat_path, device_display_name))
+                
+                # 添加1秒延时（除了最后一个设备）
+                if i < len(devices) - 1:
+                    import time
+                    time.sleep(1)
+                
+            except Exception as e:
+                QMessageBox.warning(self, "错误", f"为设备 {device} 生成脚本时出错：\n{str(e)}")
+                continue
+
+        if not generated_bat_files:
+            QMessageBox.critical(self, "错误", "没有成功生成任何bat脚本！")
+            return
+
+        # 显示成功消息
+        bat_files_info = "\n".join([f"• {device_name}: {bat_path}" for bat_path, device_name in generated_bat_files])
+        QMessageBox.information(self, "脚本生成成功", 
+                              f"已为 {len(generated_bat_files)} 台设备生成bat脚本：\n\n{bat_files_info}\n\n即将同时运行所有脚本...")
+
+        # 同时运行所有bat文件（每个设备一个窗口）
+        for bat_path, device_name in generated_bat_files:
             try:
                 # 使用os.startfile直接打开bat文件，这是最原生的Windows方式
                 os.startfile(bat_path)
+                print(f"已启动设备 {device_name} 的脚本执行窗口")
             except Exception as e:
-                print(f"无法自动运行bat脚本: {e}")
-                QMessageBox.warning(self, "警告", f"无法自动运行bat脚本，请手动运行：\n{bat_path}")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"生成或运行bat脚本时出错：\n{str(e)}")
+                print(f"无法自动运行设备 {device_name} 的bat脚本: {e}")
+                QMessageBox.warning(self, "警告", f"无法自动运行设备 {device_name} 的bat脚本，请手动运行：\n{bat_path}")
 
     def delete_command(self, checkbox):
         command_key = checkbox.text()
