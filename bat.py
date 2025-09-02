@@ -564,19 +564,25 @@ class LogVerboseMaskApp(QWidget):
         # 创建设备选择区域
         device_layout = QHBoxLayout()
         device_label = QLabel("选择设备:")
+        device_label.setToolTip("选择设备需要执行的设备")
         self.device_combo = QComboBox()
         refresh_button = QPushButton("刷新")
+        refresh_button.setToolTip("刷新设备列表")
         refresh_button.clicked.connect(self.refresh_devices)
         
         # 添加编辑设备名称按钮
         edit_device_button = QPushButton("编辑设备名称")
+        edit_device_button.setToolTip("自定义设备名称")
         edit_device_button.clicked.connect(self.edit_current_device_name)
         
         # 添加USB功能切换按钮
         usb_label = QLabel("USB模式:")
         only_charge_button = QPushButton("仅充电")
+        only_charge_button.setToolTip("仅充电模式，不进行文件传输")
         file_transfer_button = QPushButton("文件传输")
+        file_transfer_button.setToolTip("文件传输模式，可以进行文件传输")
         photo_transfer_button = QPushButton("传输照片")
+        photo_transfer_button.setToolTip("传输照片模式，可以进行照片传输")
         kuajie_label = QLabel("快速功能:")
         camera_button = QPushButton("拍照")
         camera_button.setToolTip("启动相机后点击拍照")
@@ -620,26 +626,31 @@ class LogVerboseMaskApp(QWidget):
 
         # 创建运行按钮
         run_button = QPushButton("运行")
+        run_button.setToolTip("选中的单个设备执行脚本")
         run_button.clicked.connect(self.execute_adb_commands)
         button_layout.addWidget(run_button)
 
         # 创建批量执行按钮
         batch_run_button = QPushButton("批量执行")
+        batch_run_button.setToolTip("已连接设备批量执行脚本")
         batch_run_button.clicked.connect(self.batch_execute_adb_commands)
         button_layout.addWidget(batch_run_button)
 
         # 创建下载按钮
         download_button = QPushButton("下载")
+        download_button.setToolTip("启动下载窗口，从相机/储存卡下载照片")
         download_button.clicked.connect(self.open_download_window)
         button_layout.addWidget(download_button)
 
         # 创建新增按钮
         add_button = QPushButton("新增脚本")
+        add_button.setToolTip("新增自定义脚本，方便自己编写脚本")
         add_button.clicked.connect(self.add_new_script)
         button_layout.addWidget(add_button)
         
         # 创建原生运行按钮
         native_run_button = QPushButton("原生运行")
+        native_run_button.setToolTip("原生运行主直接运行bat文件，最原生的Windows方式")
         native_run_button.clicked.connect(self.native_run_script)
         button_layout.addWidget(native_run_button)
         # 将按钮布局添加到主布局
