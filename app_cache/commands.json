@@ -1,81 +1,86 @@
 {
-    "HDR": [
-        "adb shell setenforce 0",
-        "adb shell \"mkdir /data/local/tmp/morpho/image_refiner/dump -p\"",
-        "adb shell \"chmod 777 /data/local/tmp/morpho/image_refiner/dump\"",
-        "adb shell setprop debug.morpho.image_refiner.enable 1",
-        "adb shell setprop debug.morpho.image_refiner.dump 3",
-        "adb shell setprop debug.morpho.image_refiner.dump_path /data/local/tmp/morpho/image_refiner/dump",
-        "adb shell setprop debug.morpho.image_refiner.enable 1",
-        "adb shell setprop debug.morpho.image_refiner.draw_logo 1"
-    ],
-    "超夜": [
-        "adb shell setprop persist.vendor.camera.siq.dump 1",
-        "adb shell setprop vendor.camera.siq.dump_input_output 1"
-    ],
-    "Kill": [
-        "adb shell input keyevent 3",
-        "adb shell \"for pid in $(ps -A | grep vendor.qti.camera.provider@2.7-service_64 | awk '{print $2}'); do kill $pid; done\"",
-        "adb shell \"for pid in $(ps -A | grep android.hardware.camera.provider@2.4-service_64 | awk '{print $2}'); do kill $pid; done\"",
-        "adb shell \"for pid in $(ps -A | grep cameraserver | awk '{print $2}'); do kill $pid; done\"",
-        "adb shell \"for pid in $(ps -A | grep com.android.camera | awk '{print $2}'); do kill $pid; done\"",
-        "adb shell \"kill $(pidof camerahalserver)\"",
-        "adb shell \"kill $(pidof cameraserver)\"",
-        "adb shell pkill camera*"
-    ],
-    "3A": [
-        "adb shell \"echo enable3ADebugData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo enableTuningMetadata=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo dumpSensorEEPROMData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo logCoreCfgMask=0x2780ba >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo reprocessDump=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\""
-    ],
-    "离线log": [
-        "adb shell \"echo enableAsciiLogging=1 >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo logWarningMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo logVerboseMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo logInfoMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo logConfigMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
-        "adb shell \"echo logEntryExitMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\""
-    ],
-    "清除nvram": [
-        "adb root",
-        "adb remount",
-        "adb shell pkill camera*",
-        "adb shell setenforce 0",
-        "adb shell rm -rf /data/nvram",
-        "adb shell rm -rf nvcfg",
-        "adb shell rm -r vendor/nvcfg/camera",
-        "adb shell rm -r vendor/nvcfg/*",
-        "adb shell rm -rf mnt/vendor/nvcfg/camera",
-        "adb shell pkill cameras",
-        "adb shell pkill camerahal",
-        "adb shell pkill cameraserver",
-        "adb shell pkill camerahalserver"
-    ],
-    "adb pull": [
-        "adb root",
-        "adb remount",
-        "timeout /t 1 >nul",
-        "timeout /t 1 >nul",
-        "ping 127.0.0.1 -n 2 >nul",
-        "set \"FOLDER=%date:~0,4%%date:~5,2%%date:~8,2%_%time:~0,2%%time:~3,2%%time:~6,2%\"",
-        "echo %FOLDER%",
-        "md \"%FOLDER%\" 2>nul",
-        "cd \"%FOLDER%",
-        "adb pull sdcard/dcim/camera/"
-    ],
-    "录屏_请使用原生运行": [
-        "@echo.",
-        "@echo off",
-        "adb shell mkdir /sdcard/Screenrecord/",
-        "@echo. -------start---------------------------",
-        "@echo.   Ctrl+C STOP! 按下N下载并打开截图文件夹",
-        "FOR /F \"tokens=*\" %%A IN ('TIME/T') DO SET Now=%%A",
-        "adb shell screenrecord /sdcard/Screenrecord/screenrecord_%Now:~0,2%%Now:~3,2%.mp4",
-        "adb pull /sdcard/Screenrecord .\\",
-        "start explorer \".\\Screenrecord\"",
-        "echo success!",
-        "pause"
-    ]
+    "高通": {},
+    "MTK": {},
+    "Unisoc": {},
+    "Others": {
+        "HDR": [
+            "adb shell setenforce 0",
+            "adb shell \"mkdir /data/local/tmp/morpho/image_refiner/dump -p\"",
+            "adb shell \"chmod 777 /data/local/tmp/morpho/image_refiner/dump\"",
+            "adb shell setprop debug.morpho.image_refiner.enable 1",
+            "adb shell setprop debug.morpho.image_refiner.dump 3",
+            "adb shell setprop debug.morpho.image_refiner.dump_path /data/local/tmp/morpho/image_refiner/dump",
+            "adb shell setprop debug.morpho.image_refiner.enable 1",
+            "adb shell setprop debug.morpho.image_refiner.draw_logo 1"
+        ],
+        "超夜": [
+            "adb shell setprop persist.vendor.camera.siq.dump 1",
+            "adb shell setprop vendor.camera.siq.dump_input_output 1"
+        ],
+        "Kill": [
+            "adb shell input keyevent 3",
+            "adb shell \"for pid in $(ps -A | grep vendor.qti.camera.provider@2.7-service_64 | awk '{print $2}'); do kill $pid; done\"",
+            "adb shell \"for pid in $(ps -A | grep android.hardware.camera.provider@2.4-service_64 | awk '{print $2}'); do kill $pid; done\"",
+            "adb shell \"for pid in $(ps -A | grep cameraserver | awk '{print $2}'); do kill $pid; done\"",
+            "adb shell \"for pid in $(ps -A | grep com.android.camera | awk '{print $2}'); do kill $pid; done\"",
+            "adb shell \"kill $(pidof camerahalserver)\"",
+            "adb shell \"kill $(pidof cameraserver)\"",
+            "adb shell pkill camera*"
+        ],
+        "3A": [
+            "adb shell \"echo enable3ADebugData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo enableTuningMetadata=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo dumpSensorEEPROMData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo logCoreCfgMask=0x2780ba >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo reprocessDump=TRUE >> /vendor/etc/camera/camxoverridesettings.txt\""
+        ],
+        "离线log": [
+            "adb shell \"echo enableAsciiLogging=1 >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo logWarningMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo logVerboseMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo logInfoMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo logConfigMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\"",
+            "adb shell \"echo logEntryExitMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt\""
+        ],
+        "清除nvram": [
+            "adb root",
+            "adb remount",
+            "adb shell pkill camera*",
+            "adb shell setenforce 0",
+            "adb shell rm -rf /data/nvram",
+            "adb shell rm -rf nvcfg",
+            "adb shell rm -r vendor/nvcfg/camera",
+            "adb shell rm -r vendor/nvcfg/*",
+            "adb shell rm -rf mnt/vendor/nvcfg/camera",
+            "adb shell pkill cameras",
+            "adb shell pkill camerahal",
+            "adb shell pkill cameraserver",
+            "adb shell pkill camerahalserver"
+        ],
+        "adb pull": [
+            "adb root",
+            "adb remount",
+            "timeout /t 1 >nul",
+            "timeout /t 1 >nul",
+            "ping 127.0.0.1 -n 2 >nul",
+            "set \"FOLDER=%date:~0,4%%date:~5,2%%date:~8,2%_%time:~0,2%%time:~3,2%%time:~6,2%\"",
+            "echo %FOLDER%",
+            "md \"%FOLDER%\" 2>nul",
+            "cd \"%FOLDER%",
+            "adb pull sdcard/dcim/camera/"
+        ],
+        "录屏_请使用原生运行": [
+            "@echo.",
+            "@echo off",
+            "adb shell mkdir /sdcard/Screenrecord/",
+            "@echo. -------start---------------------------",
+            "@echo.   Ctrl+C STOP! 按下N下载并打开截图文件夹",
+            "FOR /F \"tokens=*\" %%A IN ('TIME/T') DO SET Now=%%A",
+            "adb shell screenrecord /sdcard/Screenrecord/screenrecord_%Now:~0,2%%Now:~3,2%.mp4",
+            "adb pull /sdcard/Screenrecord .\\",
+            "start explorer \".\\Screenrecord\"",
+            "echo success!",
+            "pause"
+        ]
+    }
 }

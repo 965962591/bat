@@ -19,6 +19,9 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QProgressBar,
     QSpinBox,
+    QTabWidget,
+    QRadioButton,
+    QButtonGroup,
 )
 from PyQt5.QtWidgets import QScrollArea
 import subprocess
@@ -108,6 +111,12 @@ class LogVerboseMaskApp(QWidget):
         os.makedirs(APP_CACHE_DIR, exist_ok=True)
         self.specific_commands = self.load_commands()
         self.device_name_mapping = {}  # 设备ID到自定义名称的映射
+        
+        # 标签页相关变量
+        self.tab_widget = None
+        self.tab_checkboxes = {}  # 存储每个标签页的复选框 {tab_name: [checkboxes]}
+        self.tab_script_checkboxes = {}  # 存储高通脚本复选框 {tab_name: [checkboxes]}
+        
         self.initUI()
         self.setup_logging()
         
@@ -135,7 +144,13 @@ class LogVerboseMaskApp(QWidget):
         if os.path.exists(self.COMMANDS_FILE):
             try: # 添加 try-except 块处理可能的 JSONDecodeError
                 with open(self.COMMANDS_FILE, "r", encoding="utf-8") as file:
-                    return json.load(file)
+                    loaded_data = json.load(file)
+                    # 检查是否是新的标签页格式
+                    if self.is_new_format(loaded_data):
+                        return loaded_data
+                    else:
+                        # 转换旧格式到新格式
+                        return self.convert_old_format(loaded_data)
             except json.JSONDecodeError:
                 # print(f"警告：无法解析 {self.COMMANDS_FILE}，将使用默认命令。")
                 return self.get_default_commands() # 返回默认命令
@@ -143,60 +158,96 @@ class LogVerboseMaskApp(QWidget):
             # 如果文件不存在，使用默认命令
             return self.get_default_commands() # 返回默认命令
 
+    def is_new_format(self, data):
+        """检查数据是否是新格式（按标签页分类）"""
+        if not isinstance(data, dict):
+            return False
+        
+        # 检查是否包含标签页键
+        expected_tabs = ["高通", "MTK", "Unisoc", "Others"]
+        return any(tab in data for tab in expected_tabs)
+
+    def convert_old_format(self, old_data):
+        """将旧格式转换为新格式"""
+        new_data = self.get_default_commands()
+        
+        # 将旧的自定义脚本移动到Others标签页
+        if isinstance(old_data, dict):
+            for script_name, commands in old_data.items():
+                # 跳过已经是默认脚本的，只添加自定义脚本
+                if script_name not in new_data["Others"]:
+                    new_data["Others"][script_name] = commands
+        
+        # 保存转换后的新格式
+        self.save_commands_to_file(new_data)
+        
+        return new_data
+
+    def save_commands_to_file(self, data):
+        """将数据保存到文件"""
+        try:
+            with open(self.COMMANDS_FILE, "w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=4)
+        except IOError as e:
+            print(f"保存命令配置时出错: {e}")
+
     def get_default_commands(self): # 新增一个方法来返回默认命令
-        """返回默认命令字典"""
+        """返回默认命令字典，按标签页分类"""
         return {
-            "HDR": [
-                "adb shell setenforce 0",
-                'adb shell "mkdir /data/local/tmp/morpho/image_refiner/dump -p"',
-                'adb shell "chmod 777 /data/local/tmp/morpho/image_refiner/dump"',
-                "adb shell setprop debug.morpho.image_refiner.enable 1",
-                "adb shell setprop debug.morpho.image_refiner.dump 3",
-                "adb shell setprop debug.morpho.image_refiner.dump_path /data/local/tmp/morpho/image_refiner/dump",
-                "adb shell setprop debug.morpho.image_refiner.enable 1",
-                "adb shell setprop debug.morpho.image_refiner.draw_logo 1",
-            ],
-            "超夜": [
-                "adb shell setprop persist.vendor.camera.siq.dump 1",
-                "adb shell setprop vendor.camera.siq.dump_input_output 1",
-            ],
-            "Kill": [
-                "adb shell input keyevent 3",
-                "adb shell \"for pid in $(ps -A | grep vendor.qti.camera.provider@2.7-service_64 | awk '{print $2}'); do kill $pid; done\"",
-                "adb shell \"for pid in $(ps -A | grep android.hardware.camera.provider@2.4-service_64 | awk '{print $2}'); do kill $pid; done\"",
-                "adb shell \"for pid in $(ps -A | grep cameraserver | awk '{print $2}'); do kill $pid; done\"",
-                "adb shell \"for pid in $(ps -A | grep com.android.camera | awk '{print $2}'); do kill $pid; done\"",
-                'adb shell "kill $(pidof camerahalserver)"',
-                'adb shell "kill $(pidof cameraserver)"',
-                "adb shell pkill camera*",
-            ],
-            "3A": [
-                'adb shell "echo enable3ADebugData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo enableTuningMetadata=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo dumpSensorEEPROMData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo logCoreCfgMask=0x2780ba >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo reprocessDump=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
-            ],
-            "离线log": [
-                'adb shell "echo enableAsciiLogging=1 >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo logWarningMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo logVerboseMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo logInfoMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo logConfigMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
-                'adb shell "echo logEntryExitMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
-            ],
+            "高通": {},
+            "MTK": {},
+            "Unisoc": {},
+            "Others": {
+                "HDR": [
+                    "adb shell setenforce 0",
+                    'adb shell "mkdir /data/local/tmp/morpho/image_refiner/dump -p"',
+                    'adb shell "chmod 777 /data/local/tmp/morpho/image_refiner/dump"',
+                    "adb shell setprop debug.morpho.image_refiner.enable 1",
+                    "adb shell setprop debug.morpho.image_refiner.dump 3",
+                    "adb shell setprop debug.morpho.image_refiner.dump_path /data/local/tmp/morpho/image_refiner/dump",
+                    "adb shell setprop debug.morpho.image_refiner.enable 1",
+                    "adb shell setprop debug.morpho.image_refiner.draw_logo 1",
+                ],
+                "超夜": [
+                    "adb shell setprop persist.vendor.camera.siq.dump 1",
+                    "adb shell setprop vendor.camera.siq.dump_input_output 1",
+                ],
+                "Kill": [
+                    "adb shell input keyevent 3",
+                    "adb shell \"for pid in $(ps -A | grep vendor.qti.camera.provider@2.7-service_64 | awk '{print $2}'); do kill $pid; done\"",
+                    "adb shell \"for pid in $(ps -A | grep android.hardware.camera.provider@2.4-service_64 | awk '{print $2}'); do kill $pid; done\"",
+                    "adb shell \"for pid in $(ps -A | grep cameraserver | awk '{print $2}'); do kill $pid; done\"",
+                    "adb shell \"for pid in $(ps -A | grep com.android.camera | awk '{print $2}'); do kill $pid; done\"",
+                    'adb shell "kill $(pidof camerahalserver)"',
+                    'adb shell "kill $(pidof cameraserver)"',
+                    "adb shell pkill camera*",
+                ],
+                "3A": [
+                    'adb shell "echo enable3ADebugData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo enableTuningMetadata=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo dumpSensorEEPROMData=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo logCoreCfgMask=0x2780ba >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo reprocessDump=TRUE >> /vendor/etc/camera/camxoverridesettings.txt"',
+                ],
+                "离线log": [
+                    'adb shell "echo enableAsciiLogging=1 >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo logWarningMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo logVerboseMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo logInfoMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo logConfigMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
+                    'adb shell "echo logEntryExitMask=0x10080  >> /vendor/etc/camera/camxoverridesettings.txt"',
+                ],
+            }
         }
 
     def save_commands(self):
         """将命令保存到文件"""
         # 确保缓存目录存在
         os.makedirs(APP_CACHE_DIR, exist_ok=True)
-        try: # 添加 try-except 块处理可能的写入错误
-            with open(self.COMMANDS_FILE, "w", encoding="utf-8") as file:
-                json.dump(self.specific_commands, file, ensure_ascii=False, indent=4)
-        except IOError as e:
-            # print(f"错误：无法写入配置文件 {self.COMMANDS_FILE}: {e}")
-            QMessageBox.warning(self, "保存错误", f"""无法保存命令配置到:{self.COMMANDS_FILE}错误: {e}""")
+        try:
+            self.save_commands_to_file(self.specific_commands)
+        except Exception as e:
+            QMessageBox.warning(self, "保存错误", f"无法保存命令配置到: {self.COMMANDS_FILE}\n错误: {e}")
 
     def load_device_names(self):
         """从INI文件加载设备名称映射"""
@@ -681,85 +732,109 @@ class LogVerboseMaskApp(QWidget):
         # 将按钮布局添加到主布局
         main_layout.addLayout(button_layout)
 
-        # 创建复选框布局
-        grid_layout = QGridLayout()
+        # 创建上半部分widget（包含所有控制区域）
+        top_widget = QWidget()
+        top_widget.setLayout(main_layout)
 
-        # 添加第一个标签
-        script_label = QLabel("高通脚本：")
-        grid_layout.addWidget(script_label, 0, 0, 1, 4)
+        # 创建标签页控件
+        self.tab_widget = QTabWidget()
+        self.create_tabs()
 
-        # 初始化脚本复选框列表
-        self.script_checkboxes = []
-
-        # 添加脚本复选框
-        script_labels = [
-            "Sensor",
-            "Application",
-            "IQ module",
-            "IFace",
-            "Utilities",
-            "LMME",
-            "ISP",
-            "Sync",
-            "NCS",
-            "Post Processor",
-            "MemSpy",
-            "Metadata",
-            "Image Lib",
-            "Asserts",
-            "AEC",
-            "CPP",
-            "Core",
-            "AWB",
-            "HAL",
-            "HWI",
-            "AF",
-            "JPEG",
-            "CHI",
-            "DRQ",
-            "Stats",
-            "FD",
-            "CSL",
-            "FD",
-        ]
-        for i, label in enumerate(script_labels):
-            checkbox = QCheckBox(label)
-            checkbox.stateChanged.connect(self.update_script_mask)
-            row = (i // 4) + 1  # 从第1行开始
-            col = i % 4
-            grid_layout.addWidget(checkbox, row, col)
-            self.script_checkboxes.append(checkbox)
-
-        # 添加第二个标签
-        command_label = QLabel("自定义脚本：")
-        command_start_row = (len(script_labels) // 4) + 1
-        grid_layout.addWidget(command_label, command_start_row, 0, 1, 4)  # 占据一整行
-
-        # 初始化命令复选框列表
-        self.command_checkboxes = []
-
-        # 动态添加命令复选框
-        command_checkboxes = list(self.specific_commands.keys())  # 从加载的命令中获取键
-        for i, label in enumerate(command_checkboxes):
-            checkbox = QCheckBox(label)
-            checkbox.stateChanged.connect(self.update_command_mask)
-            checkbox.setContextMenuPolicy(Qt.CustomContextMenu)
-            checkbox.customContextMenuRequested.connect(
-                lambda pos, cb=checkbox: self.show_context_menu(pos, cb)
-            )
-            row = command_start_row + 1 + (i // 4)  # 从命令标签的下一行开始
-            col = i % 4
-            grid_layout.addWidget(checkbox, row, col)
-            self.command_checkboxes.append(checkbox)
-
-        main_layout.addLayout(grid_layout)
-        self.setLayout(main_layout)
+        # 创建垂直分割器
+        main_splitter = QSplitter(Qt.Vertical)
+        main_splitter.addWidget(top_widget)
+        main_splitter.addWidget(self.tab_widget)
+        
+        # 设置分割器比例（1:1）
+        main_splitter.setSizes([450, 450])  # 根据窗口高度1200的一半设置
+        
+        # 设置主布局
+        final_layout = QVBoxLayout()
+        final_layout.addWidget(main_splitter)
+        final_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
+        self.setLayout(final_layout)
 
         # 批量拍摄状态变量
         self.capture_thread = None
         self.capture_stop_event = threading.Event()
         self.capture_pause_event = threading.Event()
         self.capture_running = False
+
+    def create_tabs(self):
+        """创建标签页"""
+        # 定义标签页名称
+        tab_names = ["高通", "MTK", "Unisoc", "Others"]
+        
+        # 初始化标签页复选框字典
+        for tab_name in tab_names:
+            self.tab_checkboxes[tab_name] = []
+            self.tab_script_checkboxes[tab_name] = []
+        
+        # 为每个标签页创建内容
+        for tab_name in tab_names:
+            tab_widget = QWidget()
+            tab_layout = QVBoxLayout(tab_widget)
+            
+            # 创建滚动区域
+            scroll_area = QScrollArea()
+            scroll_widget = QWidget()
+            scroll_layout = QGridLayout(scroll_widget)
+            
+            if tab_name == "高通":
+                # 高通标签页：包含高通脚本复选框和自定义脚本复选框
+                self.create_qualcomm_tab(scroll_layout, tab_name)
+            else:
+                # 其他标签页：只包含自定义脚本复选框
+                self.create_other_tab(scroll_layout, tab_name)
+            
+            scroll_area.setWidget(scroll_widget)
+            scroll_area.setWidgetResizable(True)
+            tab_layout.addWidget(scroll_area)
+            
+            self.tab_widget.addTab(tab_widget, tab_name)
+
+    def create_qualcomm_tab(self, layout, tab_name):
+        """创建高通标签页内容"""
+        # 高通脚本复选框
+        script_labels = [
+            "Sensor", "Application", "IQ module", "IFace",
+            "Utilities", "LMME", "ISP", "Sync",
+            "NCS", "Post Processor", "MemSpy", "Metadata",
+            "Image Lib", "Asserts", "AEC", "CPP",
+            "Core", "AWB", "HAL", "HWI",
+            "AF", "JPEG", "CHI", "DRQ",
+            "Stats", "FD", "CSL", "FD",
+        ]
+        
+        for i, label in enumerate(script_labels):
+            checkbox = QCheckBox(label)
+            checkbox.stateChanged.connect(self.update_script_mask)
+            row = i // 4
+            col = i % 4
+            layout.addWidget(checkbox, row, col)
+            self.tab_script_checkboxes[tab_name].append(checkbox)
+
+    def create_other_tab(self, layout, tab_name):
+        """创建其他标签页内容"""
+        # 添加自定义脚本复选框
+        self.add_custom_scripts_to_tab(layout, tab_name, 0)
+
+    def add_custom_scripts_to_tab(self, layout, tab_name, start_row):
+        """向标签页添加自定义脚本复选框"""
+        # 获取该标签页的自定义脚本
+        tab_commands = self.specific_commands.get(tab_name, {})
+        
+        for i, (script_name, commands) in enumerate(tab_commands.items()):
+            checkbox = QCheckBox(script_name)
+            checkbox.stateChanged.connect(self.update_command_mask)
+            checkbox.setContextMenuPolicy(Qt.CustomContextMenu)
+            checkbox.customContextMenuRequested.connect(
+                lambda pos, cb=checkbox: self.show_context_menu(pos, cb)
+            )
+            row = start_row + (i // 4)
+            col = i % 4
+            layout.addWidget(checkbox, row, col)
+            self.tab_checkboxes[tab_name].append(checkbox)
 
     def _hidden_startupinfo(self):
         startupinfo = None
@@ -870,7 +945,7 @@ class LogVerboseMaskApp(QWidget):
             self.capture_pause_event.set()
 
     def update_script_mask(self):
-        """更新 script_label 下的复选框"""
+        """更新高通脚本复选框"""
         self.mask_value = 0x00000000
         commands = []
         # 定义每个标签对应的指令值
@@ -906,7 +981,10 @@ class LogVerboseMaskApp(QWidget):
         ]
         current_text = self.mask_display.toPlainText().split("\n")
         current_text = [line for line in current_text if line.strip()]  # 移除空行
-        for i, checkbox in enumerate(self.script_checkboxes):
+        
+        # 只处理高通标签页的脚本复选框
+        qualcomm_checkboxes = self.tab_script_checkboxes.get("高通", [])
+        for i, checkbox in enumerate(qualcomm_checkboxes):
             command = f'adb shell "echo logVerboseMask=0x{command_values[i]:08X} >> /vendor/etc/camera/camxoverridesettings.txt"'
             if checkbox.isChecked():
                 if i < len(command_values):
@@ -919,31 +997,28 @@ class LogVerboseMaskApp(QWidget):
         self.mask_display.setText("\n".join(current_text + commands))
 
     def update_command_mask(self):
-        """更新 command_label 下的复选框"""
+        """更新所有标签页的自定义脚本复选框"""
         commands = []
         current_text = self.mask_display.toPlainText().split("\n")
         current_text = [line for line in current_text if line.strip()]  # 移除空行
-        # print(f"update_command_mask - 当前文本框内容: {current_text}")
         
-        for checkbox in self.command_checkboxes:
-            command_list = self.specific_commands.get(checkbox.text(), [])
-            
-            if checkbox.isChecked():
-                for command in command_list:
-                    if command not in current_text:
-                        # print(f"update_command_mask - 添加命令: {command}")
-
-                        commands.append(command)
-                    else:
-                        print(f"update_command_mask - 命令已存在，跳过: {command}")
-            else:
-                for command in command_list:
-                    if command in current_text:
-                        # print(f"update_command_mask - 移除命令: {command}")
-                        current_text.remove(command)
+        # 遍历所有标签页的自定义脚本复选框
+        for tab_name, checkboxes in self.tab_checkboxes.items():
+            for checkbox in checkboxes:
+                # 获取该脚本的命令列表
+                tab_commands = self.specific_commands.get(tab_name, {})
+                command_list = tab_commands.get(checkbox.text(), [])
+                
+                if checkbox.isChecked():
+                    for command in command_list:
+                        if command not in current_text:
+                            commands.append(command)
+                else:
+                    for command in command_list:
+                        if command in current_text:
+                            current_text.remove(command)
         
         final_commands = current_text + commands
-        # print(f"update_command_mask - 最终命令列表: {final_commands}")
         self.mask_display.setText("\n".join(final_commands))
 
     @pyqtSlot()
@@ -1049,24 +1124,22 @@ class LogVerboseMaskApp(QWidget):
                         all_commands.append(cmd)
 
             # 添加特定命令（指定设备）
-            for checkbox in self.command_checkboxes:
-                if checkbox.isChecked() and checkbox.text() in self.specific_commands:
-                    # print(f"处理复选框 '{checkbox.text()}' 的命令")
-                    for cmd in self.specific_commands[checkbox.text()]:
-                        # print(f"原始命令: {cmd}")
-                        if cmd.startswith("adb shell"):
-                            # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
-                            new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
-                            # print(f"替换后命令: {new_cmd}")
-                            all_commands.append(new_cmd)
-                        elif cmd.startswith("adb "):
-                            # 对所有其他 adb 命令添加设备号
-                            new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
-                            # print(f"替换adb命令: {cmd} -> {new_cmd}")
-                            all_commands.append(new_cmd)
-                        else:
-                            # print(f"非adb命令，直接添加: {cmd}")
-                            all_commands.append(cmd)
+            for tab_name, checkboxes in self.tab_checkboxes.items():
+                for checkbox in checkboxes:
+                    if checkbox.isChecked():
+                        tab_commands = self.specific_commands.get(tab_name, {})
+                        command_list = tab_commands.get(checkbox.text(), [])
+                        for cmd in command_list:
+                            if cmd.startswith("adb shell"):
+                                # 将 "adb shell" 替换为 "adb -s {selected_device} shell"
+                                new_cmd = cmd.replace("adb shell", f"adb -s {selected_device} shell")
+                                all_commands.append(new_cmd)
+                            elif cmd.startswith("adb "):
+                                # 对所有其他 adb 命令添加设备号
+                                new_cmd = cmd.replace("adb ", f"adb -s {selected_device} ", 1)
+                                all_commands.append(new_cmd)
+                            else:
+                                all_commands.append(cmd)
 
             # 添加查看配置文件的命令（指定设备）
             all_commands.append(
@@ -1201,24 +1274,22 @@ class LogVerboseMaskApp(QWidget):
                                 all_commands.append(cmd)
 
                     # 添加特定命令（指定设备）
-                    for checkbox in self.command_checkboxes:
-                        if checkbox.isChecked() and checkbox.text() in self.specific_commands:
-                            # print(f"批量执行 - 处理复选框 '{checkbox.text()}' 的命令")
-                            for cmd in self.specific_commands[checkbox.text()]:
-                                # print(f"批量执行 - 原始命令: {cmd}")
-                                if cmd.startswith("adb shell"):
-                                    # 将 "adb shell" 替换为 "adb -s {device} shell"
-                                    new_cmd = cmd.replace("adb shell", f"adb -s {device} shell")
-                                    # print(f"批量执行 - 替换后命令: {new_cmd}")
-                                    all_commands.append(new_cmd)
-                                elif cmd.startswith("adb "):
-                                    # 对所有其他 adb 命令添加设备号
-                                    new_cmd = cmd.replace("adb ", f"adb -s {device} ", 1)
-                                    # print(f"批量执行 - 替换adb命令: {cmd} -> {new_cmd}")
-                                    all_commands.append(new_cmd)
-                                else:
-                                    # print(f"批量执行 - 非adb命令，直接添加: {cmd}")
-                                    all_commands.append(cmd)
+                    for tab_name, checkboxes in self.tab_checkboxes.items():
+                        for checkbox in checkboxes:
+                            if checkbox.isChecked():
+                                tab_commands = self.specific_commands.get(tab_name, {})
+                                command_list = tab_commands.get(checkbox.text(), [])
+                                for cmd in command_list:
+                                    if cmd.startswith("adb shell"):
+                                        # 将 "adb shell" 替换为 "adb -s {device} shell"
+                                        new_cmd = cmd.replace("adb shell", f"adb -s {device} shell")
+                                        all_commands.append(new_cmd)
+                                    elif cmd.startswith("adb "):
+                                        # 对所有其他 adb 命令添加设备号
+                                        new_cmd = cmd.replace("adb ", f"adb -s {device} ", 1)
+                                        all_commands.append(new_cmd)
+                                    else:
+                                        all_commands.append(cmd)
 
                     # 添加查看配置文件的命令（指定设备）
                     all_commands.append(
@@ -1321,16 +1392,28 @@ class LogVerboseMaskApp(QWidget):
             self.rename_command(checkbox)
 
     def edit_command(self, command_key):
-        current_commands = self.specific_commands.get(command_key, [])
+        # 查找脚本所在的标签页
+        script_tab = None
+        current_commands = []
+        for tab_name, tab_commands in self.specific_commands.items():
+            if command_key in tab_commands:
+                script_tab = tab_name
+                current_commands = tab_commands[command_key]
+                break
+        
+        if script_tab is None:
+            QMessageBox.warning(self, "错误", "未找到指定的脚本！")
+            return
+        
         if isinstance(current_commands, list):
             current_commands = "\n".join(current_commands)
         
         # 创建自定义编辑对话框
-        dialog = ScriptEditDialog(self, command_key, current_commands)
+        dialog = ScriptEditDialog(self, command_key, current_commands, script_tab)
         if dialog.exec_() == QDialog.Accepted:
             new_commands = dialog.get_content()
             if new_commands:
-                self.specific_commands[command_key] = new_commands.split("\n")
+                self.specific_commands[script_tab][command_key] = new_commands.split("\n")
                 self.save_commands()
 
     def rename_command(self, checkbox):
@@ -1340,35 +1423,64 @@ class LogVerboseMaskApp(QWidget):
             self, "重命名脚本", "输入新的脚本名称：", text=old_name
         )
         if ok and new_name:
-            if new_name in self.specific_commands:
-                QMessageBox.warning(self, "错误", "脚本名称已存在。")
+            # 查找脚本所在的标签页
+            script_tab = None
+            for tab_name, tab_commands in self.specific_commands.items():
+                if old_name in tab_commands:
+                    script_tab = tab_name
+                    break
+            
+            if script_tab is None:
+                QMessageBox.warning(self, "错误", "未找到指定的脚本！")
                 return
+            
+            # 检查新名称是否已存在
+            for tab_name, tab_commands in self.specific_commands.items():
+                if new_name in tab_commands:
+                    QMessageBox.warning(self, "错误", f"脚本名称 '{new_name}' 已存在于 '{tab_name}' 标签页中！")
+                    return
+            
             # 更新 specific_commands 字典
-            self.specific_commands[new_name] = self.specific_commands.pop(old_name)
+            self.specific_commands[script_tab][new_name] = self.specific_commands[script_tab].pop(old_name)
             self.save_commands()
-            # 更新复选框标签
-            checkbox.setText(new_name)
+            
+            # 重新创建标签页以显示更新
+            self.recreate_tabs()
 
     def add_new_script(self):
         dialog = ScriptInputDialog(self)
         if dialog.exec_() == QDialog.Accepted:
-            script_name, script_content = dialog.get_inputs()
+            script_name, script_content, selected_tab = dialog.get_inputs()
             if script_name and script_content:
-                self.specific_commands[script_name] = script_content.split("\n")
+                # 确保标签页存在
+                if selected_tab not in self.specific_commands:
+                    self.specific_commands[selected_tab] = {}
+                
+                # 检查脚本名称是否已存在
+                for tab_name, tab_commands in self.specific_commands.items():
+                    if script_name in tab_commands:
+                        QMessageBox.warning(self, "错误", f"脚本名称 '{script_name}' 已存在于 '{tab_name}' 标签页中！")
+                        return
+                
+                # 添加脚本到指定标签页
+                self.specific_commands[selected_tab][script_name] = script_content.split("\n")
                 self.save_commands()
-                # 创建新的复选框
-                new_checkbox = QCheckBox(script_name)
-                new_checkbox.stateChanged.connect(
-                    self.update_command_mask
-                )  # 确保连接到 update_command_mask
-                new_checkbox.setContextMenuPolicy(Qt.CustomContextMenu)
-                new_checkbox.customContextMenuRequested.connect(
-                    lambda pos, cb=new_checkbox: self.show_context_menu(pos, cb)
-                )
-                self.command_checkboxes.append(new_checkbox)  # 添加到命令复选框列表
-                self.layout().addWidget(new_checkbox)
-                # 重新排列命令复选框
-                self.rearrange_command_checkboxes()
+                
+                # 重新创建标签页以显示新脚本
+                self.recreate_tabs()
+
+    def recreate_tabs(self):
+        """重新创建标签页"""
+        # 清除现有标签页
+        self.tab_widget.clear()
+        
+        # 重新初始化标签页复选框字典
+        for tab_name in ["高通", "MTK", "Unisoc", "Others"]:
+            self.tab_checkboxes[tab_name] = []
+            self.tab_script_checkboxes[tab_name] = []
+        
+        # 重新创建标签页
+        self.create_tabs()
 
     def native_run_script(self):
         """原生运行：检查所有已连接设备，为每个设备生成bat脚本并同时执行"""
@@ -1507,66 +1619,18 @@ class LogVerboseMaskApp(QWidget):
 
     def delete_command(self, checkbox):
         command_key = checkbox.text()
-        # 移除命令
-        if command_key in self.specific_commands:
-            del self.specific_commands[command_key]
-            self.save_commands()
         
-        # 从界面移除复选框
-        # 查找正确的网格布局
-        grid_layout = None
-        main_layout = self.layout()
-        for i in range(main_layout.count()):
-            item = main_layout.itemAt(i)
-            if item.layout():
-                if isinstance(item.layout(), QGridLayout):
-                    grid_layout = item.layout()
-                    break
+        # 查找并移除命令
+        for tab_name, tab_commands in self.specific_commands.items():
+            if command_key in tab_commands:
+                del self.specific_commands[tab_name][command_key]
+                self.save_commands()
+                break
         
-        if grid_layout:
-            grid_layout.removeWidget(checkbox)
-        checkbox.deleteLater()
-        
-        # 从命令复选框列表中移除
-        self.command_checkboxes.remove(checkbox)
-        # 重新排列命令复选框
-        self.rearrange_command_checkboxes()
-        # 更新 mask
-        self.update_script_mask()
+        # 重新创建标签页以显示更新
+        self.recreate_tabs()
 
-    def rearrange_command_checkboxes(self):
-        """重新排列 command_label 下的命令复选框"""
-        # 查找正确的网格布局
-        grid_layout = None
-        main_layout = self.layout()
-        for i in range(main_layout.count()):
-            item = main_layout.itemAt(i)
-            if item.layout():
-                if isinstance(item.layout(), QGridLayout):
-                    grid_layout = item.layout()
-                    break
-        
-        if grid_layout:
-            # 清除当前布局中的所有命令复选框
-            for i in reversed(range(grid_layout.count())):
-                widget = grid_layout.itemAt(i).widget()
-                if isinstance(widget, QCheckBox) and widget in self.command_checkboxes:
-                    grid_layout.removeWidget(widget)
 
-            # 重新添加命令复选框
-            columns = 4
-            command_start_row = (len(self.script_checkboxes) // 4) + 2
-            for index, checkbox in enumerate(self.command_checkboxes):
-                row = command_start_row + 1 + (index // columns)
-                col = index % columns
-                grid_layout.addWidget(checkbox, row, col)
-            
-            # 强制更新界面
-            grid_layout.update()
-            self.update()
-            self.repaint()
-        else:
-            print("错误：未找到网格布局")
 
     def on_device_changed(self):
         """设备变化回调函数"""
@@ -1619,6 +1683,23 @@ class ScriptInputDialog(QDialog):
         self.script_name_input.setMinimumHeight(30)
         layout.addWidget(self.script_name_input)
 
+        # 创建标签页选择区域
+        tab_label = QLabel("选择标签页:")
+        layout.addWidget(tab_label)
+        
+        # 创建单选按钮组
+        self.tab_button_group = QButtonGroup(self)
+        tab_names = ["高通", "MTK", "Unisoc", "Others"]
+        
+        tab_layout = QHBoxLayout()
+        for i, tab_name in enumerate(tab_names):
+            radio_button = QRadioButton(tab_name)
+            radio_button.setChecked(i == 0)  # 默认选择高通
+            self.tab_button_group.addButton(radio_button, i)
+            tab_layout.addWidget(radio_button)
+        
+        layout.addLayout(tab_layout)
+
         # 创建脚本内容标签和输入框
         content_label = QLabel("输入脚本内容:")
         layout.addWidget(content_label)
@@ -1637,11 +1718,14 @@ class ScriptInputDialog(QDialog):
         layout.addWidget(self.button_box)
 
     def get_inputs(self):
-        return self.script_name_input.text(), self.script_content_input.toPlainText()
+        script_name = self.script_name_input.text()
+        script_content = self.script_content_input.toPlainText()
+        selected_tab = self.tab_button_group.checkedButton().text()
+        return script_name, script_content, selected_tab
 
 
 class ScriptEditDialog(QDialog):
-    def __init__(self, parent=None, script_name="", script_content=""):
+    def __init__(self, parent=None, script_name="", script_content="", script_tab=""):
         super().__init__(parent)
         self.setWindowTitle(f"编辑脚本 - {script_name}")
         
@@ -1658,6 +1742,12 @@ class ScriptEditDialog(QDialog):
         name_label = QLabel(f"脚本名称: {script_name}")
         name_label.setStyleSheet("font-weight: bold; color: #2c3e50;")
         layout.addWidget(name_label)
+
+        # 创建标签页信息标签（只读显示）
+        if script_tab:
+            tab_label = QLabel(f"所属标签页: {script_tab}")
+            tab_label.setStyleSheet("color: #7f8c8d; font-size: 12px;")
+            layout.addWidget(tab_label)
 
         # 创建脚本内容标签和输入框
         content_label = QLabel("脚本内容:")

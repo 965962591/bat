@@ -22,8 +22,8 @@ if sys.platform == "win32":
         '--windows-disable-console',
         '--output-dir=output',        
         'bat.py',
-        '--windows-file-version=3.8.2.5',
-        '--windows-product-version=3.8.2.5',
+        '--windows-file-version=3.8.2.6',
+        '--windows-product-version=3.8.2.6',
         '--windows-file-description=bat脚本管理工具',
         '--windows-company-name=LongCheer',
         '--copyright=BarryChen'
