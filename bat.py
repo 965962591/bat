@@ -506,16 +506,16 @@ class LogVerboseMaskApp(QMainWindow):
             )
             
             if result.returncode == 0:
-                QMessageBox.information(self, "成功", f"USB模式已切换到: {mode_name}")
+                self.show_auto_close_message("成功", f"USB模式已切换到: {mode_name}", QMessageBox.Information, 3000)
                 # print(f"USB模式切换成功: {mode_name}")
             else:
                 error_msg = result.stderr.strip() if result.stderr else "未知错误"
-                QMessageBox.warning(self, "执行失败", f"切换USB模式失败: {error_msg}")
+                self.show_auto_close_message("执行失败", f"切换USB模式失败: {error_msg}", QMessageBox.Warning, 3000)
                 # print(f"USB模式切换失败: {error_msg}")
                 
         except Exception as e:
             error_msg = f"执行USB模式切换时出错: {str(e)}"
-            QMessageBox.critical(self, "错误", error_msg)
+            self.show_auto_close_message("错误", error_msg, QMessageBox.Critical, 3000)
             # print(error_msg)
 
     def take_screenshot(self):
@@ -562,12 +562,12 @@ class LogVerboseMaskApp(QMainWindow):
 
             if result.returncode == 0:
                 print(f"已保存截图到: {remote_path}")
-                QMessageBox.information(self, "成功", f"已保存截图到: {remote_path}")
+                self.show_auto_close_message("成功", f"已保存截图到: {remote_path}", QMessageBox.Information, 3000)
             else:
                 error_msg = result.stderr.strip() if result.stderr else "未知错误"
-                QMessageBox.warning(self, "执行失败", f"截屏失败: {error_msg}")
+                self.show_auto_close_message("执行失败", f"截屏失败: {error_msg}", QMessageBox.Warning, 3000)
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"执行截屏命令时出错: {str(e)}")
+            self.show_auto_close_message("错误", f"执行截屏命令时出错: {str(e)}", QMessageBox.Critical, 3000)
 
 
     def take_photo(self):
@@ -728,16 +728,16 @@ class LogVerboseMaskApp(QMainWindow):
             )
             
             if result.returncode == 0:
-                QMessageBox.information(self, "成功", f"暗码 '{name}' (代码: {code}) 执行成功！")
+                self.show_auto_close_message("成功", f"暗码 '{name}' (代码: {code}) 执行成功！", QMessageBox.Information, 3000)
                 print(f"暗码执行成功: {name} ({code})")
             else:
                 error_msg = result.stderr.strip() if result.stderr else "未知错误"
-                QMessageBox.warning(self, "执行失败", f"暗码 '{name}' 执行失败: {error_msg}")
+                self.show_auto_close_message("执行失败", f"暗码 '{name}' 执行失败: {error_msg}", QMessageBox.Warning, 3000)
                 print(f"暗码执行失败: {name} ({code}) - {error_msg}")
                 
         except Exception as e:
             error_msg = f"执行暗码时出错: {str(e)}"
-            QMessageBox.critical(self, "错误", error_msg)
+            self.show_auto_close_message("错误", error_msg, QMessageBox.Critical, 3000)
             print(error_msg)
 
     def create_quick_functions_menu(self, quick_menu):
@@ -1167,7 +1167,20 @@ class LogVerboseMaskApp(QMainWindow):
 
     @pyqtSlot()
     def show_success_message(self):
-        QMessageBox.information(self, "成功", "脚本执行成功！")
+        self.show_auto_close_message("成功", "脚本执行成功！", QMessageBox.Information, 3000)
+
+    def show_auto_close_message(self, title, text, icon=QMessageBox.Information, timeout_ms=3000):
+        """显示可自动关闭的消息框（非阻塞）。"""
+        try:
+            msg = QMessageBox(self)
+            msg.setWindowTitle(title)
+            msg.setText(text)
+            msg.setIcon(icon)
+            msg.setStandardButtons(QMessageBox.Ok)
+            QTimer.singleShot(timeout_ms, msg.accept)
+            msg.show()
+        except Exception:
+            QMessageBox.information(self, title, text)
 
     def setup_logging(self):
         """移除日志记录设置"""
@@ -1517,10 +1530,8 @@ class LogVerboseMaskApp(QMainWindow):
     @pyqtSlot(str, bool)
     def show_batch_result_dialog(self, message, has_failures):
         """在主线程中显示批量执行结果对话框"""
-        if has_failures:
-            QMessageBox.information(self, "批量执行结果", message)
-        else:
-            QMessageBox.information(self, "批量执行结果", message)
+        # 批量执行结果3秒自动关闭
+        self.show_auto_close_message("批量执行结果", message, QMessageBox.Information, 3000)
 
     def show_context_menu(self, pos, checkbox):
         menu = QMenu(self)
