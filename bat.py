@@ -2691,7 +2691,8 @@ class DownloadThread(QThread):
                             source_path = f"/sdcard/{folder}"
                         
                         # 目标目录: <dest>/<timestamp>/<top_folder_name>/<device_display_name>
-                        top_folder_name = os.path.basename(source_path.rstrip('/'))
+                        # 智能生成文件夹名，避免同名冲突
+                        top_folder_name = self.generate_unique_folder_name(source_path, self.folders)
                         top_folder_dir = os.path.join(timestamp_folder, top_folder_name)
                         try:
                             os.makedirs(top_folder_dir, exist_ok=True)
@@ -2732,6 +2733,56 @@ class DownloadThread(QThread):
         # 只有在正常完成下载时才发送完成信号
         self.download_finished.emit(success_count, len(self.devices), failed_devices)
     
+    def generate_unique_folder_name(self, source_path, all_folders):
+        """智能生成唯一的文件夹名，避免同名冲突"""
+        # 获取路径的最后一部分作为基础文件夹名
+        base_name = os.path.basename(source_path.rstrip('/'))
+        
+        # 检查是否有其他路径的最后文件夹名与当前相同
+        conflicting_folders = []
+        for folder in all_folders:
+            # 规范化路径
+            if folder.startswith("sdcard/") or folder.startswith("data/"):
+                normalized_folder = f"/{folder}"
+            else:
+                normalized_folder = f"/sdcard/{folder}"
+            
+            other_base_name = os.path.basename(normalized_folder.rstrip('/'))
+            if other_base_name == base_name and normalized_folder != source_path:
+                conflicting_folders.append(normalized_folder)
+        
+        # 如果没有冲突，直接返回基础名称
+        if not conflicting_folders:
+            return base_name
+        
+        # 如果有冲突，需要拼接上一层文件夹名来区分
+        # 获取当前路径的上一层文件夹名
+        parent_dir = os.path.dirname(source_path.rstrip('/'))
+        parent_name = os.path.basename(parent_dir)
+        
+        # 如果上一层文件夹名不为空且不是根目录，则拼接
+        if parent_name and parent_name != '/' and parent_name != '':
+            unique_name = f"{parent_name}_{base_name}"
+        else:
+            # 如果上一层是根目录，尝试获取更上层的路径
+            grandparent_dir = os.path.dirname(parent_dir)
+            grandparent_name = os.path.basename(grandparent_dir)
+            if grandparent_name and grandparent_name != '/' and grandparent_name != '':
+                unique_name = f"{grandparent_name}_{base_name}"
+            else:
+                # 如果还是无法区分，使用路径的更多部分
+                path_parts = source_path.strip('/').split('/')
+                if len(path_parts) >= 2:
+                    # 使用倒数第二个和最后一个部分
+                    unique_name = f"{path_parts[-2]}_{path_parts[-1]}"
+                else:
+                    # 最后的选择：使用完整路径的hash值
+                    import hashlib
+                    path_hash = hashlib.md5(source_path.encode()).hexdigest()[:8]
+                    unique_name = f"{base_name}_{path_hash}"
+        
+        return unique_name
+
     def format_timestamp(self, timestamp):
         """格式化时间戳"""
         # 按照优先级判断，从最具体的开始
