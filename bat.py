@@ -774,11 +774,20 @@ class LogVerboseMaskApp(QWidget):
         for tab_name in tab_names:
             tab_widget = QWidget()
             tab_layout = QVBoxLayout(tab_widget)
+            tab_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
             
             # 创建滚动区域
             scroll_area = QScrollArea()
             scroll_widget = QWidget()
             scroll_layout = QGridLayout(scroll_widget)
+            scroll_layout.setContentsMargins(10, 10, 10, 10)  # 设置内边距
+            scroll_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置顶部左对齐
+            scroll_layout.setHorizontalSpacing(20)  # 设置水平间距
+            scroll_layout.setVerticalSpacing(10)    # 设置垂直间距
+            scroll_layout.setColumnStretch(0, 1)    # 让各列均匀分布
+            scroll_layout.setColumnStretch(1, 1)
+            scroll_layout.setColumnStretch(2, 1)
+            scroll_layout.setColumnStretch(3, 1)
             
             if tab_name == "高通":
                 # 高通标签页：包含高通脚本复选框和自定义脚本复选框
@@ -789,6 +798,7 @@ class LogVerboseMaskApp(QWidget):
             
             scroll_area.setWidget(scroll_widget)
             scroll_area.setWidgetResizable(True)
+            scroll_area.setAlignment(Qt.AlignTop)  # 滚动区域也设置为顶部对齐
             tab_layout.addWidget(scroll_area)
             
             self.tab_widget.addTab(tab_widget, tab_name)
