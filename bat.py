@@ -2,6 +2,7 @@ import sys
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
+    QMainWindow,
     QCheckBox,
     QGridLayout,
     QTextEdit,
@@ -11,6 +12,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QLabel,
     QMenu,
+    QAction,
     QInputDialog,
     QSplitter,
     QDialog,
@@ -99,7 +101,7 @@ class USBDeviceMonitor:
             self.monitor_thread.join(timeout=2)
 
 
-class LogVerboseMaskApp(QWidget):
+class LogVerboseMaskApp(QMainWindow):
     COMMANDS_FILE = os.path.join(APP_CACHE_DIR, "commands.json")
     
     # 添加设备变化信号
@@ -603,6 +605,155 @@ class LogVerboseMaskApp(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"执行拍照命令时出错: {str(e)}")
 
+    def create_menu_bar(self):
+        """创建菜单栏"""
+        menubar = self.menuBar()
+        
+        # 创建USB模式菜单
+        usb_menu = menubar.addMenu('USB模式')
+        
+        # 仅充电模式
+        only_charge_action = QAction('仅充电', self)
+        only_charge_action.setToolTip('仅充电模式，不进行文件传输')
+        only_charge_action.triggered.connect(lambda: self.switch_usb_mode("仅充电", ""))
+        usb_menu.addAction(only_charge_action)
+        
+        # 文件传输模式
+        file_transfer_action = QAction('文件传输', self)
+        file_transfer_action.setToolTip('文件传输模式，可以进行文件传输')
+        file_transfer_action.triggered.connect(lambda: self.switch_usb_mode("文件传输", "mtp"))
+        usb_menu.addAction(file_transfer_action)
+        
+        # 传输照片模式
+        photo_transfer_action = QAction('传输照片', self)
+        photo_transfer_action.setToolTip('传输照片模式，可以进行照片传输')
+        photo_transfer_action.triggered.connect(lambda: self.switch_usb_mode("传输照片", "ptp"))
+        usb_menu.addAction(photo_transfer_action)
+        
+        # 创建暗码菜单
+        secret_menu = menubar.addMenu('暗码功能')
+        self.create_secret_code_menu(secret_menu)
+        
+        # 创建快捷功能菜单
+        quick_menu = menubar.addMenu('快捷功能')
+        self.create_quick_functions_menu(quick_menu)
+
+    def load_secret_codes(self):
+        """从INI文件加载暗码配置"""
+        ini_path = os.path.join(APP_CACHE_DIR, "bat_filepath.ini")
+        secret_codes = {}
+        try:
+            if os.path.exists(ini_path):
+                # 直接读取文件内容，专门查找[SECRET_CODE]节
+                with open(ini_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # 查找[SECRET_CODE]节
+                import re
+                secret_pattern = r'\[SECRET_CODE\](.*?)(?=\[|$)'
+                match = re.search(secret_pattern, content, re.DOTALL)
+                
+                if match:
+                    secret_content = match.group(1).strip()
+                    for line in secret_content.split('\n'):
+                        line = line.strip()
+                        if '=' in line:
+                            # 处理带引号的键值对
+                            if line.startswith('"') and '"' in line[1:]:
+                                # 找到第一个引号结束的位置
+                                quote_end = line.find('"', 1)
+                                if quote_end > 0:
+                                    key = line[1:quote_end]
+                                    value_part = line[quote_end + 1:].strip()
+                                    if value_part.startswith('='):
+                                        value = value_part[1:].strip()
+                                        if value:
+                                            secret_codes[key] = value
+                            else:
+                                # 处理不带引号的键值对
+                                key, value = line.split('=', 1)
+                                key = key.strip()
+                                value = value.strip()
+                                if key and value:
+                                    secret_codes[key] = value
+        except Exception as e:
+            print(f"加载暗码配置时出错: {e}")
+        
+        return secret_codes
+
+    def create_secret_code_menu(self, secret_menu):
+        """创建暗码菜单项"""
+        secret_codes = self.load_secret_codes()
+        
+        if not secret_codes:
+            # 如果没有配置暗码，添加一个默认项
+            no_code_action = QAction('未配置暗码', self)
+            no_code_action.setEnabled(False)
+            secret_menu.addAction(no_code_action)
+            return
+        
+        # 为每个暗码创建菜单项
+        for name, code in secret_codes.items():
+            action = QAction(name, self)
+            action.setToolTip(f'执行暗码: {code}')
+            action.triggered.connect(lambda checked, c=code, n=name: self.execute_secret_code(c, n))
+            secret_menu.addAction(action)
+
+    def execute_secret_code(self, code, name):
+        """执行暗码"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+        
+        try:
+            # 构建adb命令
+            command = f"adb -s {selected_device} shell am broadcast -a android.provider.Telephony.SECRET_CODE -d android_secret_code://{code}"
+            
+            # 使用 startupinfo 来隐藏命令行窗口
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            result = subprocess.run(
+                command, 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            
+            if result.returncode == 0:
+                QMessageBox.information(self, "成功", f"暗码 '{name}' (代码: {code}) 执行成功！")
+                print(f"暗码执行成功: {name} ({code})")
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "未知错误"
+                QMessageBox.warning(self, "执行失败", f"暗码 '{name}' 执行失败: {error_msg}")
+                print(f"暗码执行失败: {name} ({code}) - {error_msg}")
+                
+        except Exception as e:
+            error_msg = f"执行暗码时出错: {str(e)}"
+            QMessageBox.critical(self, "错误", error_msg)
+            print(error_msg)
+
+    def create_quick_functions_menu(self, quick_menu):
+        """创建快捷功能菜单"""
+        # 拍照功能
+        take_photo_action = QAction('拍照', self)
+        take_photo_action.setToolTip('启动相机后点击拍照')
+        take_photo_action.triggered.connect(self.take_photo)
+        quick_menu.addAction(take_photo_action)
+        
+        # 截屏功能
+        screenshot_action = QAction('截屏', self)
+        screenshot_action.setToolTip('截图路径/sdcard/Pictures/Screenshots/')
+        screenshot_action.triggered.connect(self.take_screenshot)
+        quick_menu.addAction(screenshot_action)
+
     def initUI(self):
         self.setWindowTitle("Bat脚本管理器")
         self.resize(1200, 900)
@@ -610,12 +761,19 @@ class LogVerboseMaskApp(QWidget):
         self.setWindowIcon(QIcon(icon_path))
         self.mask_value = 0x00000000
 
+        # 创建菜单栏
+        self.create_menu_bar()
+
+        # 创建中央widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
         # 创建主布局
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(central_widget)
 
         # 创建设备选择区域
         device_layout = QHBoxLayout()
-        device_label = QLabel("设备:")
+        device_label = QLabel("选择设备:")
         device_label.setToolTip("选择设备需要执行的设备")
         self.device_combo = QComboBox()
         refresh_button = QPushButton("刷新")
@@ -627,27 +785,14 @@ class LogVerboseMaskApp(QWidget):
         edit_device_button.setToolTip("自定义设备名称")
         edit_device_button.clicked.connect(self.edit_current_device_name)
         
-        # 添加USB功能切换按钮
-        usb_label = QLabel("USB模式:")
-        only_charge_button = QPushButton("仅充电")
-        only_charge_button.setToolTip("仅充电模式，不进行文件传输")
-        file_transfer_button = QPushButton("文件传输")
-        file_transfer_button.setToolTip("文件传输模式，可以进行文件传输")
-        photo_transfer_button = QPushButton("传输照片")
-        photo_transfer_button.setToolTip("传输照片模式，可以进行照片传输")
-        kuajie_label = QLabel("快捷:")
-        camera_button = QPushButton("拍照")
-        camera_button.setToolTip("启动相机后点击拍照")
-        screenshot_button = QPushButton("截屏")
-        screenshot_button.setToolTip("截图路径/sdcard/Pictures/Screenshots/")
-
+        # 快捷功能（拍照、截屏）已移至菜单栏
         # 批量拍摄控件：数量、间隔、拍摄、暂停/继续
-        capture_count_label = QLabel("数量:")
+        capture_count_label = QLabel("拍摄数量:")
         self.capture_count_spin = QSpinBox()
         self.capture_count_spin.setRange(1, 100000)
         self.capture_count_spin.setValue(10)
 
-        capture_interval_label = QLabel("间隔(秒):")
+        capture_interval_label = QLabel("拍摄间隔(秒):")
         self.capture_interval_spin = QSpinBox()
         self.capture_interval_spin.setRange(1, 3600)
         self.capture_interval_spin.setValue(1)
@@ -658,11 +803,6 @@ class LogVerboseMaskApp(QWidget):
         self.capture_pause_btn.setEnabled(False)
 
         # 连接按钮信号
-        only_charge_button.clicked.connect(lambda: self.switch_usb_mode("仅充电", ""))
-        file_transfer_button.clicked.connect(lambda: self.switch_usb_mode("文件传输", "mtp"))
-        photo_transfer_button.clicked.connect(lambda: self.switch_usb_mode("传输照片", "ptp"))
-        camera_button.clicked.connect(self.take_photo)
-        screenshot_button.clicked.connect(self.take_screenshot)
         self.capture_start_btn.clicked.connect(self.start_batch_capture)
         self.capture_pause_btn.clicked.connect(self.toggle_capture_pause)
         
@@ -670,13 +810,6 @@ class LogVerboseMaskApp(QWidget):
         device_layout.addWidget(self.device_combo)
         device_layout.addWidget(refresh_button)
         device_layout.addWidget(edit_device_button)
-        device_layout.addWidget(usb_label)
-        device_layout.addWidget(only_charge_button)
-        device_layout.addWidget(file_transfer_button)
-        device_layout.addWidget(photo_transfer_button)
-        device_layout.addWidget(kuajie_label)
-        device_layout.addWidget(camera_button)
-        device_layout.addWidget(screenshot_button)
         device_layout.addWidget(capture_count_label)
         device_layout.addWidget(self.capture_count_spin)
         device_layout.addWidget(capture_interval_label)
@@ -732,7 +865,7 @@ class LogVerboseMaskApp(QWidget):
         # 将按钮布局添加到主布局
         main_layout.addLayout(button_layout)
 
-        # 创建上半部分widget（包含所有控制区域）
+        # 创建上半部分widget（包含设备选择和按钮区域）
         top_widget = QWidget()
         top_widget.setLayout(main_layout)
 
@@ -748,11 +881,10 @@ class LogVerboseMaskApp(QWidget):
         # 设置分割器比例（1:1）
         main_splitter.setSizes([450, 450])  # 根据窗口高度1200的一半设置
         
-        # 设置主布局
-        final_layout = QVBoxLayout()
-        final_layout.addWidget(main_splitter)
-        final_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
-        self.setLayout(final_layout)
+        # 将主分割器设置为中央widget的内容
+        central_widget_layout = QVBoxLayout(central_widget)
+        central_widget_layout.addWidget(main_splitter)
+        central_widget_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
 
         # 批量拍摄状态变量
         self.capture_thread = None
