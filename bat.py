@@ -763,7 +763,7 @@ class LogVerboseMaskApp(QWidget):
     def create_tabs(self):
         """创建标签页"""
         # 定义标签页名称
-        tab_names = ["高通", "MTK", "Unisoc", "Others"]
+        tab_names = ["高通固定页", "高通", "MTK", "Unisoc", "Others"]
         
         # 初始化标签页复选框字典
         for tab_name in tab_names:
@@ -789,11 +789,11 @@ class LogVerboseMaskApp(QWidget):
             scroll_layout.setColumnStretch(2, 1)
             scroll_layout.setColumnStretch(3, 1)
             
-            if tab_name == "高通":
-                # 高通标签页：包含高通脚本复选框和自定义脚本复选框
-                self.create_qualcomm_tab(scroll_layout, tab_name)
+            if tab_name == "高通固定页":
+                # 高通固定页：只包含高通脚本复选框，不可修改
+                self.create_qualcomm_fixed_tab(scroll_layout, tab_name)
             else:
-                # 其他标签页：只包含自定义脚本复选框
+                # 其他标签页（高通、MTK、Unisoc、Others）：只包含自定义脚本复选框
                 self.create_other_tab(scroll_layout, tab_name)
             
             scroll_area.setWidget(scroll_widget)
@@ -803,8 +803,8 @@ class LogVerboseMaskApp(QWidget):
             
             self.tab_widget.addTab(tab_widget, tab_name)
 
-    def create_qualcomm_tab(self, layout, tab_name):
-        """创建高通标签页内容"""
+    def create_qualcomm_fixed_tab(self, layout, tab_name):
+        """创建高通固定页内容（只读）"""
         # 高通脚本复选框
         script_labels = [
             "Sensor", "Application", "IQ module", "IFace",
@@ -819,6 +819,8 @@ class LogVerboseMaskApp(QWidget):
         for i, label in enumerate(script_labels):
             checkbox = QCheckBox(label)
             checkbox.stateChanged.connect(self.update_script_mask)
+            # 高通固定页的复选框不设置右键菜单，不可编辑
+            checkbox.setContextMenuPolicy(Qt.NoContextMenu)  # 禁用右键菜单
             row = i // 4
             col = i % 4
             layout.addWidget(checkbox, row, col)
@@ -992,8 +994,8 @@ class LogVerboseMaskApp(QWidget):
         current_text = self.mask_display.toPlainText().split("\n")
         current_text = [line for line in current_text if line.strip()]  # 移除空行
         
-        # 只处理高通标签页的脚本复选框
-        qualcomm_checkboxes = self.tab_script_checkboxes.get("高通", [])
+        # 只处理高通固定页的脚本复选框
+        qualcomm_checkboxes = self.tab_script_checkboxes.get("高通固定页", [])
         for i, checkbox in enumerate(qualcomm_checkboxes):
             command = f'adb shell "echo logVerboseMask=0x{command_values[i]:08X} >> /vendor/etc/camera/camxoverridesettings.txt"'
             if checkbox.isChecked():
@@ -1485,7 +1487,7 @@ class LogVerboseMaskApp(QWidget):
         self.tab_widget.clear()
         
         # 重新初始化标签页复选框字典
-        for tab_name in ["高通", "MTK", "Unisoc", "Others"]:
+        for tab_name in ["高通固定页", "高通", "MTK", "Unisoc", "Others"]:
             self.tab_checkboxes[tab_name] = []
             self.tab_script_checkboxes[tab_name] = []
         
