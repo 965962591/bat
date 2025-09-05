@@ -1932,7 +1932,7 @@ class FileDownloadDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setWindowTitle("从相机/储存卡下载照片")
+        self.setWindowTitle("从设备下载照片")
         self.resize(1200, 800)
         self.setMinimumSize(600, 500)
         
@@ -2304,6 +2304,8 @@ class FileDownloadDialog(QDialog):
         
         # 子文件夹创建选项
         subfolder_layout = QHBoxLayout()
+        
+        # 下拉列表和示例
         subfolder_label = QLabel("子文件夹命名:")
         self.subfolder_combo = QComboBox()
         self.subfolder_combo.addItems(["年\\日", "年\\月\\日", "年\\月\\日\\时", "年\\月\\日\\时分", "年\\月\\日\\时分秒"])
@@ -2334,10 +2336,21 @@ class FileDownloadDialog(QDialog):
         subfolder_example = self.subfolder_example
         subfolder_example.setStyleSheet("color: #7f8c8d; font-size: 12px;")
         
+        # 自定义输入框
+        custom_label = QLabel("自定义名称:")
+        self.custom_subfolder_input = QLineEdit()
+        self.custom_subfolder_input.setPlaceholderText("留空使用日期格式，请输入自定义文件名如:第一轮FT")
+        self.custom_subfolder_input.setToolTip("留空使用日期格式，请输入自定义文件名如:第一轮FT")
+        self.custom_subfolder_input.setMinimumWidth(500)  # 设置最小宽度确保文本显示完整
+        
+        # 将所有控件添加到水平布局中
         subfolder_layout.addWidget(subfolder_label)
         subfolder_layout.addWidget(self.subfolder_combo)
         subfolder_layout.addWidget(subfolder_example)
+        subfolder_layout.addWidget(custom_label)
+        subfolder_layout.addWidget(self.custom_subfolder_input)
         subfolder_layout.addStretch()
+        
         dest_layout.addLayout(subfolder_layout)
         
         layout.addWidget(dest_group)
@@ -2689,7 +2702,8 @@ class FileDownloadDialog(QDialog):
             dest_path, 
             self.subfolder_combo.currentText(),
             True,  # 总是使用手动模式，因为我们现在有明确的文件夹列表
-            self.device_name_mapping  # 传递设备名称映射
+            self.device_name_mapping,  # 传递设备名称映射
+            self.custom_subfolder_input.text().strip()  # 传递自定义子文件夹名称
         )
         self.download_thread.download_finished.connect(self.download_finished)
         self.download_thread.folder_not_found.connect(self.handle_folder_not_found)  # 连接新信号
@@ -2869,7 +2883,7 @@ class DownloadThread(QThread):
     # 新增进度相关信号
     task_progress_updated = pyqtSignal(str, str, int)  # 设备ID, 文件夹名, 进度百分比
     
-    def __init__(self, devices, folders, dest_path, subfolder_format, is_manual_mode, device_name_mapping=None):
+    def __init__(self, devices, folders, dest_path, subfolder_format, is_manual_mode, device_name_mapping=None, custom_subfolder_name=None):
         super().__init__()
         self.devices = devices
         self.folders = folders
@@ -2877,6 +2891,7 @@ class DownloadThread(QThread):
         self.subfolder_format = subfolder_format
         self.is_manual_mode = is_manual_mode
         self.device_name_mapping = device_name_mapping or {}
+        self.custom_subfolder_name = custom_subfolder_name or ""
         
         # 计算总任务数
         self.total_tasks = len(devices) * len(folders)
@@ -3030,7 +3045,11 @@ class DownloadThread(QThread):
 
     def format_timestamp(self, timestamp):
         """格式化时间戳"""
-        # 按照优先级判断，从最具体的开始
+        # 如果用户输入了自定义名称，直接使用自定义名称
+        if self.custom_subfolder_name and self.custom_subfolder_name.strip():
+            return self.custom_subfolder_name.strip()
+        
+        # 否则按照优先级判断，从最具体的开始
         if "年\\月\\日\\时分秒" in self.subfolder_format:
             return timestamp.strftime("%Y-%m-%d-%H-%M-%S")
         elif "年\\月\\日\\时分" in self.subfolder_format:
