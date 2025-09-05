@@ -2226,52 +2226,41 @@ class FileDownloadDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 8, 16, 16)
 
-        # 设备选择区域
+        # 设备选择区域（包含文件夹选择）
         device_group = QWidget()
         device_layout = QVBoxLayout(device_group)
+        device_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
+        device_layout.setSpacing(5)  # 减少间距
         
-        device_title = QLabel("选择目标设备:")
-        device_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50;")
+        # 设备标题 - 置顶左对齐
+        device_title = QLabel("选择目标设备和文件夹:")
+        device_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50; margin: 0; padding: 0;")
+        device_title.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 置顶左对齐
         device_layout.addWidget(device_title)
         
-        # 设备列表
-        device_list_layout = QVBoxLayout()
-        self.device_list_widget = QWidget()
-        self.device_list_layout = QVBoxLayout(self.device_list_widget)
+        # 创建滚动区域来容纳设备选择
+        self.device_scroll = QScrollArea()
+        self.device_scroll.setWidgetResizable(True)
+        self.device_scroll.setMaximumHeight(400)  # 限制最大高度
+        self.device_scroll.setMinimumHeight(200)  # 设置最小高度
+        self.device_scroll.setFrameStyle(0)  # 移除边框
         
-        device_list_layout.addWidget(self.device_list_widget)
-        device_layout.addLayout(device_list_layout)
-        
-        layout.addWidget(device_group)
-        
-        # 设备文件夹选择区域
-        self.device_folders_group = QWidget()
-        device_folders_layout = QVBoxLayout(self.device_folders_group)
-        
-        device_folders_title = QLabel("设备文件夹选择:")
-        device_folders_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50;")
-        device_folders_layout.addWidget(device_folders_title)
-        
-        # 创建滚动区域来容纳设备文件夹选择
-        self.device_folders_scroll = QScrollArea()
-        self.device_folders_scroll.setWidgetResizable(True)
-        self.device_folders_scroll.setMaximumHeight(300)  # 限制最大高度
-        self.device_folders_scroll.setMinimumHeight(150)  # 设置最小高度
-        
-        # 创建容器widget来放置设备文件夹选择
-        self.device_folders_container = QWidget()
-        self.device_folders_layout = QVBoxLayout(self.device_folders_container)
-        self.device_folders_layout.setContentsMargins(0, 0, 0, 0)
-        self.device_folders_layout.setSpacing(10)
+        # 创建容器widget来放置设备选择
+        self.device_container = QWidget()
+        self.device_layout = QVBoxLayout(self.device_container)
+        self.device_layout.setContentsMargins(5, 5, 5, 5)  # 减少内边距
+        self.device_layout.setSpacing(8)  # 减少间距
         
         # 设置滚动区域的widget
-        self.device_folders_scroll.setWidget(self.device_folders_container)
-        device_folders_layout.addWidget(self.device_folders_scroll)
+        self.device_scroll.setWidget(self.device_container)
+        device_layout.addWidget(self.device_scroll)
         
         # 存储设备文件夹选择的字典 {device_id: {folder_name: checkbox}}
         self.device_folder_checkboxes = {}
+        # 存储设备文件夹容器的字典 {device_id: widget}
+        self.device_folder_containers = {}
         
-        layout.addWidget(self.device_folders_group)
+        layout.addWidget(device_group)
         
         # 目标区域
         dest_group = QWidget()
@@ -2450,27 +2439,36 @@ class FileDownloadDialog(QDialog):
     def update_device_checkboxes(self):
         """更新设备复选框"""
         # 清除现有的设备复选框和映射
-        for i in reversed(range(self.device_list_layout.count())):
-            widget = self.device_list_layout.itemAt(i).widget()
+        for i in reversed(range(self.device_layout.count())):
+            widget = self.device_layout.itemAt(i).widget()
             if widget:
                 widget.deleteLater()
         
         self.device_checkboxes.clear()
+        self.device_folder_checkboxes.clear()
+        self.device_folder_containers.clear()
         
         if not self.devices:
             no_device_label = QLabel("未检测到设备")
             no_device_label.setStyleSheet("color: #e74c3c; font-style: italic;")
-            self.device_list_layout.addWidget(no_device_label)
-            # 清空设备文件夹选择区域
-            self.clear_device_folders()
+            self.device_layout.addWidget(no_device_label)
         else:
             previously_selected = getattr(self, 'previously_selected_devices', set())
+            # 获取固定的文件夹列表
+            fixed_folders = self.load_fixed_source_paths()
+            
             for device in self.devices:
-                # 创建水平布局容器
-                device_container = QWidget()
-                device_layout = QHBoxLayout(device_container)
-                device_layout.setContentsMargins(0, 0, 0, 0)
-                device_layout.setSpacing(5)
+                # 创建设备主容器
+                device_main_container = QWidget()
+                device_main_layout = QVBoxLayout(device_main_container)
+                device_main_layout.setContentsMargins(2, 2, 2, 2)  # 进一步减少边距
+                device_main_layout.setSpacing(3)  # 减少间距
+                
+                # 创建设备选择行
+                device_row_container = QWidget()
+                device_row_layout = QHBoxLayout(device_row_container)
+                device_row_layout.setContentsMargins(0, 0, 0, 0)
+                device_row_layout.setSpacing(5)
                 
                 # 创建复选框，显示自定义名称或原始ID
                 display_name = self.get_device_display_name(device)
@@ -2488,106 +2486,78 @@ class FileDownloadDialog(QDialog):
                 edit_btn = QPushButton("编辑")
                 edit_btn.clicked.connect(lambda checked, d=device: self.edit_device_name(d))
                 
-                # 添加到容器布局
-                device_layout.addWidget(checkbox)
-                device_layout.addWidget(edit_btn)
-                device_layout.addStretch()
+                # 添加到设备行布局
+                device_row_layout.addWidget(checkbox)
+                device_row_layout.addWidget(edit_btn)
+                device_row_layout.addStretch()
                 
-                # 将容器添加到主布局
-                self.device_list_layout.addWidget(device_container)
+                # 添加到主容器
+                device_main_layout.addWidget(device_row_container)
+                
+                # 创建设备文件夹选择区域（初始隐藏）
+                if fixed_folders:
+                    folder_container = QWidget()
+                    folder_layout = QVBoxLayout(folder_container)
+                    folder_layout.setContentsMargins(15, 2, 2, 2)  # 减少左边缩进和边距
+                    folder_layout.setSpacing(3)  # 减少间距
+                    
+                    # 文件夹标题
+                    folder_title = QLabel("选择文件夹:")
+                    folder_title.setStyleSheet("color: #7f8c8d; font-size: 11px; font-weight: bold; margin: 0; padding: 0;")
+                    folder_layout.addWidget(folder_title)
+                    
+                    # 创建文件夹复选框网格
+                    folders_grid = QWidget()
+                    folders_grid_layout = QGridLayout(folders_grid)
+                    folders_grid_layout.setContentsMargins(0, 0, 0, 0)
+                    folders_grid_layout.setSpacing(3)  # 减少网格间距
+                    
+                    # 初始化设备文件夹复选框字典
+                    self.device_folder_checkboxes[device] = {}
+                    
+                    columns = 3  # 每行显示3个复选框
+                    for idx, folder in enumerate(fixed_folders):
+                        folder_checkbox = QCheckBox(folder)
+                        folder_checkbox.setToolTip(f"选择设备 {display_name} 的文件夹: {folder}")
+                        folder_checkbox.stateChanged.connect(self.update_download_button_state)
+                        
+                        row = idx // columns
+                        col = idx % columns
+                        folders_grid_layout.addWidget(folder_checkbox, row, col)
+                        
+                        # 保存复选框引用
+                        self.device_folder_checkboxes[device][folder] = folder_checkbox
+                    
+                    folder_layout.addWidget(folders_grid)
+                    
+                    # 保存文件夹容器引用
+                    self.device_folder_containers[device] = folder_container
+                    
+                    # 添加到主容器
+                    device_main_layout.addWidget(folder_container)
+                    
+                    # 根据设备选择状态显示/隐藏文件夹选择
+                    folder_container.setVisible(checkbox.isChecked())
+                
+                # 将设备主容器添加到主布局
+                self.device_layout.addWidget(device_main_container)
             
-            # 更新设备文件夹选择区域
-            self.update_device_folders()
+            # 更新设备文件夹显示状态
+            self.update_device_folders_visibility()
 
     def on_device_selection_changed(self, state):
         """设备选择状态改变时的处理"""
-        # 更新设备文件夹选择区域
-        self.update_device_folders()
+        # 更新设备文件夹显示状态
+        self.update_device_folders_visibility()
         # 更新下载按钮状态
         self.update_download_button_state()
 
-    def clear_device_folders(self):
-        """清空设备文件夹选择区域"""
-        # 清除现有的设备文件夹选择
-        for i in reversed(range(self.device_folders_layout.count())):
-            widget = self.device_folders_layout.itemAt(i).widget()
-            if widget:
-                widget.deleteLater()
-        
-        self.device_folder_checkboxes.clear()
-
-    def update_device_folders(self):
-        """更新设备文件夹选择区域"""
-        # 清除现有的设备文件夹选择
-        self.clear_device_folders()
-        
-        # 获取选中的设备
-        selected_devices = []
+    def update_device_folders_visibility(self):
+        """更新设备文件夹显示状态"""
         for device_id, checkbox in self.device_checkboxes.items():
-            if checkbox.isChecked():
-                selected_devices.append(device_id)
-        
-        if not selected_devices:
-            # 如果没有选中的设备，显示提示信息
-            no_selection_label = QLabel("请先选择设备")
-            no_selection_label.setStyleSheet("color: #7f8c8d; font-style: italic; text-align: center;")
-            self.device_folders_layout.addWidget(no_selection_label)
-            return
-        
-        # 获取固定的文件夹列表（只获取一次，所有设备共用）
-        fixed_folders = self.load_fixed_source_paths()
-        
-        if not fixed_folders:
-            # 如果没有找到文件夹，显示提示信息
-            no_folders_label = QLabel("未找到可下载的文件夹")
-            no_folders_label.setStyleSheet("color: #e74c3c; font-style: italic; text-align: center;")
-            self.device_folders_layout.addWidget(no_folders_label)
-            return
-        
-        # 为每个选中的设备创建文件夹选择区域
-        for device_id in selected_devices:
-            device_display_name = self.get_device_display_name(device_id)
-            
-            # 创建设备文件夹组
-            device_folder_group = QWidget()
-            device_folder_layout = QVBoxLayout(device_folder_group)
-            device_folder_layout.setContentsMargins(10, 5, 10, 5)
-            device_folder_layout.setSpacing(5)
-            
-            # 设备标题
-            device_title = QLabel(f"设备: {device_display_name}")
-            device_title.setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 13px;")
-            device_folder_layout.addWidget(device_title)
-            
-            # 创建文件夹复选框网格
-            folders_grid = QWidget()
-            folders_grid_layout = QGridLayout(folders_grid)
-            folders_grid_layout.setContentsMargins(0, 0, 0, 0)
-            folders_grid_layout.setSpacing(5)
-            
-            # 初始化设备文件夹复选框字典
-            self.device_folder_checkboxes[device_id] = {}
-            
-            columns = 3  # 每行显示3个复选框
-            for idx, folder in enumerate(fixed_folders):
-                checkbox = QCheckBox(folder)
-                checkbox.setToolTip(f"选择设备 {device_display_name} 的文件夹: {folder}")
-                checkbox.stateChanged.connect(self.update_download_button_state)
-                
-                row = idx // columns
-                col = idx % columns
-                folders_grid_layout.addWidget(checkbox, row, col)
-                
-                # 保存复选框引用
-                self.device_folder_checkboxes[device_id][folder] = checkbox
-            
-            device_folder_layout.addWidget(folders_grid)
-            
-            # 添加到主布局
-            self.device_folders_layout.addWidget(device_folder_group)
-        
-        # 添加弹性空间
-        self.device_folders_layout.addStretch()
+            if device_id in self.device_folder_containers:
+                folder_container = self.device_folder_containers[device_id]
+                folder_container.setVisible(checkbox.isChecked())
 
     def get_device_folders(self, device_id):
         """获取指定设备的文件夹列表（使用INI文件中定义的固定路径）"""
