@@ -2252,34 +2252,44 @@ class FileDownloadDialog(QDialog):
 
     def initUI(self):
         """初始化用户界面"""
+        # 设置对话框的边距为0
+        self.setContentsMargins(0, 0, 0, 0)
+        
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 8, 16, 16)
+        layout.setSpacing(2)  # 进一步减少间距
+        layout.setContentsMargins(4, 2, 4, 4)  # 进一步减少边距，特别是顶部边距
+        layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置主布局顶部左对齐
 
+        # 设备标题 - 直接添加到主布局，不包装在额外的widget中
+        device_title = QLabel("选择目标设备和文件夹:")
+        device_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50; margin: 0; padding: 0;")
+        device_title.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 置顶左对齐
+        device_title.setContentsMargins(0, 0, 0, 0)  # 移除标题边距
+        layout.addWidget(device_title)
+        
         # 设备选择区域（包含文件夹选择）
         device_group = QWidget()
         device_layout = QVBoxLayout(device_group)
         device_layout.setContentsMargins(0, 0, 0, 0)  # 移除边距
-        device_layout.setSpacing(5)  # 减少间距
-        
-        # 设备标题 - 置顶左对齐
-        device_title = QLabel("选择目标设备和文件夹:")
-        device_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50; margin: 0; padding: 0;")
-        device_title.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 置顶左对齐
-        device_layout.addWidget(device_title)
+        device_layout.setSpacing(1)  # 最小间距
+        device_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置设备布局顶部左对齐
         
         # 创建滚动区域来容纳设备选择
         self.device_scroll = QScrollArea()
         self.device_scroll.setWidgetResizable(True)
         self.device_scroll.setMaximumHeight(400)  # 限制最大高度
-        self.device_scroll.setMinimumHeight(200)  # 设置最小高度
+        self.device_scroll.setMinimumHeight(150)  # 减少最小高度
         self.device_scroll.setFrameStyle(0)  # 移除边框
+        self.device_scroll.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置滚动区域顶部左对齐
+        self.device_scroll.setContentsMargins(0, 0, 0, 0)  # 移除滚动区域边距
+        self.device_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # 只在需要时显示滚动条
         
         # 创建容器widget来放置设备选择
         self.device_container = QWidget()
         self.device_layout = QVBoxLayout(self.device_container)
-        self.device_layout.setContentsMargins(5, 5, 5, 5)  # 减少内边距
-        self.device_layout.setSpacing(8)  # 减少间距
+        self.device_layout.setContentsMargins(0, 0, 0, 0)  # 完全移除内边距
+        self.device_layout.setSpacing(1)  # 最小间距
+        self.device_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置布局顶部左对齐
         
         # 设置滚动区域的widget
         self.device_scroll.setWidget(self.device_container)
@@ -2513,8 +2523,9 @@ class FileDownloadDialog(QDialog):
                 # 创建设备主容器
                 device_main_container = QWidget()
                 device_main_layout = QVBoxLayout(device_main_container)
-                device_main_layout.setContentsMargins(2, 2, 2, 2)  # 进一步减少边距
-                device_main_layout.setSpacing(3)  # 减少间距
+                device_main_layout.setContentsMargins(0, 0, 0, 0)  # 完全移除边距
+                device_main_layout.setSpacing(6)  # 增加设备之间的间距
+                device_main_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置顶部左对齐
                 
                 # 创建设备选择行
                 device_row_container = QWidget()
@@ -2550,8 +2561,9 @@ class FileDownloadDialog(QDialog):
                 if fixed_folders_dict:
                     folder_container = QWidget()
                     folder_layout = QVBoxLayout(folder_container)
-                    folder_layout.setContentsMargins(15, 2, 2, 2)  # 减少左边缩进和边距
-                    folder_layout.setSpacing(3)  # 减少间距
+                    folder_layout.setContentsMargins(8, 4, 0, 0)  # 增加顶部间距
+                    folder_layout.setSpacing(4)  # 增加垂直间距
+                    folder_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置顶部左对齐
                     
                     # 文件夹标题
                     folder_title = QLabel("选择文件夹:")
@@ -2562,12 +2574,12 @@ class FileDownloadDialog(QDialog):
                     folders_grid = QWidget()
                     folders_grid_layout = QGridLayout(folders_grid)
                     folders_grid_layout.setContentsMargins(0, 0, 0, 0)
-                    folders_grid_layout.setSpacing(3)  # 减少网格间距
+                    folders_grid_layout.setSpacing(8)  # 增加网格间距，让复选框不那么拥挤
                     
                     # 初始化设备文件夹复选框字典
                     self.device_folder_checkboxes[device] = {}
                     
-                    columns = 3  # 每行显示3个复选框
+                    columns = 9  # 每行显示9个复选框
                     for idx, (folder_path, custom_name) in enumerate(fixed_folders_dict.items()):
                         folder_checkbox = QCheckBox(custom_name)
                         # 设置鼠标悬浮提示，显示完整路径
