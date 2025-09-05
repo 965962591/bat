@@ -1948,6 +1948,8 @@ class FileDownloadDialog(QDialog):
         self.top_folder_checkboxes = []
         self.device_name_mapping = {}  # 设备ID到自定义名称的映射
         self.device_checkboxes = {}  # 设备ID到复选框的映射
+        self.previously_selected_devices = set()  # 之前选中的设备
+        self.previously_selected_folders = {}  # 之前选中的文件夹 {device_id: {folder_path: True}}
         
         # 创建界面
         self.initUI()
@@ -2094,12 +2096,16 @@ class FileDownloadDialog(QDialog):
         """读取固定路径与配置文件。优先从 [source] 节读取。
         支持三种格式：
         1) INI: [source] 下 paths= 多行；或 path1=, path2= ...
-        2) 旧格式: [source] 下直接逐行列出路径
-        3) 若文件不存在或解析失败，返回默认列表
-        返回: List[str]
+        2) 新格式: [source] 下 path=自定义名称 格式
+        3) 旧格式: [source] 下直接逐行列出路径
+        4) 若文件不存在或解析失败，返回默认列表
+        返回: Dict[str, str] - {路径: 自定义名称}
         """
         ini_path = os.path.join(APP_CACHE_DIR, "bat_filepath.ini")
-        default_paths = ["sdcard/dcim/camera/", "data/vendor/camera/"]
+        default_paths = {
+            "sdcard/dcim/camera/": "camera",
+            "data/vendor/camera/": "vendor_camera"
+        }
         default_target = os.path.expanduser("~/Pictures")
 
         try:
@@ -2108,7 +2114,9 @@ class FileDownloadDialog(QDialog):
 
             if not os.path.exists(ini_path):
                 # 初始化新格式 INI
-                config["source"] = {"paths": "\n".join(default_paths)}
+                config["source"] = {}
+                for path, name in default_paths.items():
+                    config["source"][path] = name
                 config["target"] = {"path": default_target}
                 with open(ini_path, "w", encoding="utf-8") as f:
                     config.write(f)
@@ -2118,32 +2126,54 @@ class FileDownloadDialog(QDialog):
             with open(ini_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            paths: list = []
+            path_name_dict = {}
             try:
                 # 优先尝试标准 INI 解析
                 config.read_string(content)
                 if config.has_section("source"):
+                    # 检查是否有新格式的路径=名称配置
+                    for key, val in config.items("source"):
+                        key = key.strip()
+                        val = val.strip()
+                        if key and val:
+                            # 检查是否是路径格式（包含/）
+                            if "/" in key:
+                                path_name_dict[key] = val
+                            elif key.lower().startswith("path"):
+                                # 旧格式的path1=, path2=等
+                                if val:
+                                    path_name_dict[val.lstrip("/")] = val.lstrip("/")
+                    
+                    # 检查是否有paths多行配置
                     if config.has_option("source", "paths"):
                         raw = config.get("source", "paths")
                         for line in raw.splitlines():
-                            p = line.strip()
-                            if p:
-                                paths.append(p.lstrip("/"))
-                    else:
-                        for key, val in config.items("source"):
-                            if key.lower().startswith("path"):
-                                p = val.strip()
-                                if p:
-                                    paths.append(p.lstrip("/"))
+                            line = line.strip()
+                            if line:
+                                if "=" in line:
+                                    # 新格式：路径=名称
+                                    path, name = line.split("=", 1)
+                                    path = path.strip().lstrip("/")
+                                    name = name.strip()
+                                    if path and name:
+                                        path_name_dict[path] = name
+                                else:
+                                    # 旧格式：只有路径
+                                    path = line.lstrip("/")
+                                    if path:
+                                        path_name_dict[path] = path
             except configparser.Error:
                 # 标准解析失败则走旧格式解析
                 pass
 
-            if not paths:
+            if not path_name_dict:
                 # 旧格式: 读取 [source] 节中的逐行内容
-                paths = self._read_legacy_section_lines("source")
+                legacy_paths = self._read_legacy_section_lines("source")
+                for path in legacy_paths:
+                    if path:
+                        path_name_dict[path.lstrip("/")] = path.lstrip("/")
 
-            return paths or default_paths
+            return path_name_dict if path_name_dict else default_paths
         except Exception:
             return default_paths
 
@@ -2392,11 +2422,19 @@ class FileDownloadDialog(QDialog):
     def refresh_devices(self):
         """刷新ADB设备列表"""
         try:
-            # 在刷新前记录当前已选中的设备，刷新后用于恢复选中状态
-            selected_before = set()
+            # 在刷新前记录当前已选中的设备和文件夹状态
+            selected_devices_before = set()
+            selected_folders_before = {}  # {device_id: {folder_path: True}}
+            
             for device_id, checkbox in self.device_checkboxes.items():
                 if checkbox.isChecked():
-                    selected_before.add(device_id)
+                    selected_devices_before.add(device_id)
+                    # 记录该设备选中的文件夹
+                    if device_id in self.device_folder_checkboxes:
+                        selected_folders_before[device_id] = {}
+                        for folder_path, folder_checkbox in self.device_folder_checkboxes[device_id].items():
+                            if folder_checkbox.isChecked():
+                                selected_folders_before[device_id][folder_path] = True
 
             startupinfo = None
             if hasattr(subprocess, 'STARTUPINFO'):
@@ -2415,25 +2453,39 @@ class FileDownloadDialog(QDialog):
             
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')[1:]
-                self.devices = []
+                new_devices = []
                 for line in lines:
                     if line.strip() and '\t' in line:
                         device_id, status = line.strip().split('\t')
                         if status == 'device':
-                            self.devices.append(device_id)
-                # 保留仍然存在的、之前已被选中的设备
-                self.previously_selected_devices = {d for d in selected_before if d in self.devices}
-
-                self.update_device_checkboxes()
+                            new_devices.append(device_id)
+                
+                # 检查设备列表是否有变化
+                devices_changed = set(self.devices) != set(new_devices)
+                self.devices = new_devices
+                
+                # 只有在设备列表变化时才重新创建UI
+                if devices_changed:
+                    # 保留仍然存在的、之前已被选中的设备
+                    self.previously_selected_devices = {d for d in selected_devices_before if d in self.devices}
+                    self.previously_selected_folders = {}
+                    for device_id, folders in selected_folders_before.items():
+                        if device_id in self.devices:
+                            self.previously_selected_folders[device_id] = folders
+                    
+                    self.update_device_checkboxes()
+                
                 self.update_download_button_state()
             else:
                 self.devices = []
                 self.previously_selected_devices = set()
+                self.previously_selected_folders = {}
                 self.update_device_checkboxes()
                 
         except Exception as e:
             self.devices = []
             self.previously_selected_devices = set()
+            self.previously_selected_folders = {}
             self.update_device_checkboxes()
 
     def update_device_checkboxes(self):
@@ -2454,8 +2506,8 @@ class FileDownloadDialog(QDialog):
             self.device_layout.addWidget(no_device_label)
         else:
             previously_selected = getattr(self, 'previously_selected_devices', set())
-            # 获取固定的文件夹列表
-            fixed_folders = self.load_fixed_source_paths()
+            # 获取固定的文件夹列表（现在是字典格式：{路径: 自定义名称}）
+            fixed_folders_dict = self.load_fixed_source_paths()
             
             for device in self.devices:
                 # 创建设备主容器
@@ -2495,7 +2547,7 @@ class FileDownloadDialog(QDialog):
                 device_main_layout.addWidget(device_row_container)
                 
                 # 创建设备文件夹选择区域（初始隐藏）
-                if fixed_folders:
+                if fixed_folders_dict:
                     folder_container = QWidget()
                     folder_layout = QVBoxLayout(folder_container)
                     folder_layout.setContentsMargins(15, 2, 2, 2)  # 减少左边缩进和边距
@@ -2516,17 +2568,23 @@ class FileDownloadDialog(QDialog):
                     self.device_folder_checkboxes[device] = {}
                     
                     columns = 3  # 每行显示3个复选框
-                    for idx, folder in enumerate(fixed_folders):
-                        folder_checkbox = QCheckBox(folder)
-                        folder_checkbox.setToolTip(f"选择设备 {display_name} 的文件夹: {folder}")
+                    for idx, (folder_path, custom_name) in enumerate(fixed_folders_dict.items()):
+                        folder_checkbox = QCheckBox(custom_name)
+                        # 设置鼠标悬浮提示，显示完整路径
+                        folder_checkbox.setToolTip(f"路径: {folder_path}\n自定义名称: {custom_name}")
                         folder_checkbox.stateChanged.connect(self.update_download_button_state)
+                        
+                        # 恢复文件夹选择状态
+                        if (device in getattr(self, 'previously_selected_folders', {}) and 
+                            folder_path in getattr(self, 'previously_selected_folders', {}).get(device, {})):
+                            folder_checkbox.setChecked(True)
                         
                         row = idx // columns
                         col = idx % columns
                         folders_grid_layout.addWidget(folder_checkbox, row, col)
                         
-                        # 保存复选框引用
-                        self.device_folder_checkboxes[device][folder] = folder_checkbox
+                        # 保存复选框引用，使用路径作为键
+                        self.device_folder_checkboxes[device][folder_path] = folder_checkbox
                     
                     folder_layout.addWidget(folders_grid)
                     
@@ -2638,16 +2696,22 @@ class FileDownloadDialog(QDialog):
         
         # 获取选中的设备和文件夹组合
         device_folder_combinations = []
+        # 获取路径到自定义名称的映射
+        path_name_dict = self.load_fixed_source_paths()
+        
         for device_id, checkbox in self.device_checkboxes.items():
             if checkbox.isChecked():
                 device_display_name = self.get_device_display_name(device_id)
                 if device_id in self.device_folder_checkboxes:
-                    for folder_name, folder_checkbox in self.device_folder_checkboxes[device_id].items():
+                    for folder_path, folder_checkbox in self.device_folder_checkboxes[device_id].items():
                         if folder_checkbox.isChecked():
+                            # 获取自定义名称，如果没有则使用路径
+                            custom_name = path_name_dict.get(folder_path, folder_path)
                             device_folder_combinations.append({
                                 'device_id': device_id,
                                 'device_display_name': device_display_name,
-                                'folder_name': folder_name
+                                'folder_path': folder_path,
+                                'custom_name': custom_name
                             })
         
         if not device_folder_combinations:
@@ -2770,7 +2834,8 @@ class FileDownloadDialog(QDialog):
         for combination in device_folder_combinations:
             device_id = combination['device_id']
             device_display_name = combination['device_display_name']
-            folder_name = combination['folder_name']
+            folder_path = combination['folder_path']
+            custom_name = combination['custom_name']
             
             # 创建进度条容器
             progress_container = QWidget()
@@ -2778,10 +2843,12 @@ class FileDownloadDialog(QDialog):
             progress_layout.setContentsMargins(0, 0, 0, 0)
             progress_layout.setSpacing(5)
             
-            # 创建标签
-            label = QLabel(f"{device_display_name} - {folder_name}")
+            # 创建标签，显示自定义名称
+            label = QLabel(f"{device_display_name} - {custom_name}")
             label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 150px;")
             label.setWordWrap(True)
+            # 设置鼠标悬浮提示，显示完整路径
+            label.setToolTip(f"路径: {folder_path}")
             
             # 创建进度条
             progress_bar = QProgressBar()
@@ -2804,8 +2871,8 @@ class FileDownloadDialog(QDialog):
             # 添加到主布局
             self.progress_bars_layout.addWidget(progress_container)
             
-            # 存储引用
-            key = f"{device_id}:{folder_name}"
+            # 存储引用，使用路径作为键（因为task_progress_updated信号使用路径）
+            key = f"{device_id}:{folder_path}"
             self.progress_bars_dict[key] = (progress_bar, label, percentage_label)
         
         # 如果没有进度条，显示提示信息
@@ -2825,9 +2892,9 @@ class FileDownloadDialog(QDialog):
             if widget:
                 widget.deleteLater()
 
-    def update_individual_progress(self, device_id, folder_name, progress):
+    def update_individual_progress(self, device_id, folder_path, progress):
         """更新指定设备-文件夹的进度条"""
-        key = f"{device_id}:{folder_name}"
+        key = f"{device_id}:{folder_path}"
         if key in self.progress_bars_dict:
             progress_bar, label, percentage_label = self.progress_bars_dict[key]
             progress_bar.setValue(progress)
@@ -2977,48 +3044,41 @@ class DownloadThread(QThread):
             try:
                 device_id = combination['device_id']
                 device_display_name = combination['device_display_name']
-                folder_name = combination['folder_name']
+                folder_path = combination['folder_path']
+                custom_name = combination['custom_name']
                 
-                self.progress_updated.emit(f"正在处理设备: {device_display_name}, 文件夹: {folder_name}")
+                self.progress_updated.emit(f"正在处理设备: {device_display_name}, 文件夹: {custom_name}")
                 
                 # 发送任务开始信号
-                self.task_progress_updated.emit(device_id, folder_name, 0)
+                self.task_progress_updated.emit(device_id, folder_path, 0)
                 
                 # 规范化源路径
-                if folder_name.startswith("sdcard/") or folder_name.startswith("data/"):
-                    source_path = f"/{folder_name}"
+                if folder_path.startswith("sdcard/") or folder_path.startswith("data/"):
+                    source_path = f"/{folder_path}"
                 else:
-                    source_path = f"/sdcard/{folder_name}"
+                    source_path = f"/sdcard/{folder_path}"
                 
-                # 目标目录: <dest>/<timestamp>/<top_folder_name>/<device_display_name>
-                # 智能生成文件夹名，避免同名冲突
-                top_folder_name = self.generate_unique_folder_name(source_path, [folder_name])
-                top_folder_dir = os.path.join(timestamp_folder, top_folder_name)
+                # 目标目录: <dest>/<timestamp>/<device_display_name>/<custom_name>
+                # 先按设备分组，再按自定义名称创建子文件夹
+                device_folder = os.path.join(timestamp_folder, device_display_name)
+                custom_folder = os.path.join(device_folder, custom_name)
                 try:
-                    os.makedirs(top_folder_dir, exist_ok=True)
+                    os.makedirs(custom_folder, exist_ok=True)
                 except Exception as e:
-                    self.progress_updated.emit(f"无法创建顶层文件夹 '{top_folder_name}': {str(e)}")
-                    failed_combinations.append(combination)
-                    continue
-                
-                device_folder = os.path.join(top_folder_dir, device_display_name)
-                try:
-                    os.makedirs(device_folder, exist_ok=True)
-                except Exception as e:
-                    self.progress_updated.emit(f"无法创建设备文件夹: {str(e)}")
+                    self.progress_updated.emit(f"无法创建文件夹 '{custom_folder}': {str(e)}")
                     failed_combinations.append(combination)
                     continue
                 
                 # 仅拉取目录内容，避免嵌套一层同名目录
-                result = self.execute_adb_pull(device_id, source_path, device_folder, folder_name)
+                result = self.execute_adb_pull(device_id, source_path, custom_folder, folder_path)
                 
                 if result:
-                    self.progress_updated.emit(f"✓ 设备 {device_display_name} 文件夹 {folder_name} 下载成功")
-                    self.task_progress_updated.emit(device_id, folder_name, 100)
+                    self.progress_updated.emit(f"✓ 设备 {device_display_name} 文件夹 {custom_name} 下载成功")
+                    self.task_progress_updated.emit(device_id, folder_path, 100)
                     success_count += 1
                 else:
-                    self.progress_updated.emit(f"✗ 设备 {device_display_name} 文件夹 {folder_name} 下载失败")
-                    self.task_progress_updated.emit(device_id, folder_name, 0)
+                    self.progress_updated.emit(f"✗ 设备 {device_display_name} 文件夹 {custom_name} 下载失败")
+                    self.task_progress_updated.emit(device_id, folder_path, 0)
                     failed_combinations.append(combination)
                 
                 # 更新任务完成数
@@ -3026,63 +3086,14 @@ class DownloadThread(QThread):
                 
             except Exception as e:
                 device_display_name = combination.get('device_display_name', 'Unknown')
-                folder_name = combination.get('folder_name', 'Unknown')
-                self.progress_updated.emit(f"设备 {device_display_name} 文件夹 {folder_name} 处理失败: {str(e)}")
+                custom_name = combination.get('custom_name', 'Unknown')
+                self.progress_updated.emit(f"设备 {device_display_name} 文件夹 {custom_name} 处理失败: {str(e)}")
                 failed_combinations.append(combination)
         
         # 只有在正常完成下载时才发送完成信号
         failed_devices = list(set([combo['device_id'] for combo in failed_combinations]))
         self.download_finished.emit(success_count, len(self.device_folder_combinations), failed_devices)
     
-    def generate_unique_folder_name(self, source_path, all_folders):
-        """智能生成唯一的文件夹名，避免同名冲突"""
-        # 获取路径的最后一部分作为基础文件夹名
-        base_name = os.path.basename(source_path.rstrip('/'))
-        
-        # 检查是否有其他路径的最后文件夹名与当前相同
-        conflicting_folders = []
-        for folder in all_folders:
-            # 规范化路径
-            if folder.startswith("sdcard/") or folder.startswith("data/"):
-                normalized_folder = f"/{folder}"
-            else:
-                normalized_folder = f"/sdcard/{folder}"
-            
-            other_base_name = os.path.basename(normalized_folder.rstrip('/'))
-            if other_base_name == base_name and normalized_folder != source_path:
-                conflicting_folders.append(normalized_folder)
-        
-        # 如果没有冲突，直接返回基础名称
-        if not conflicting_folders:
-            return base_name
-        
-        # 如果有冲突，需要拼接上一层文件夹名来区分
-        # 获取当前路径的上一层文件夹名
-        parent_dir = os.path.dirname(source_path.rstrip('/'))
-        parent_name = os.path.basename(parent_dir)
-        
-        # 如果上一层文件夹名不为空且不是根目录，则拼接
-        if parent_name and parent_name != '/' and parent_name != '':
-            unique_name = f"{parent_name}_{base_name}"
-        else:
-            # 如果上一层是根目录，尝试获取更上层的路径
-            grandparent_dir = os.path.dirname(parent_dir)
-            grandparent_name = os.path.basename(grandparent_dir)
-            if grandparent_name and grandparent_name != '/' and grandparent_name != '':
-                unique_name = f"{grandparent_name}_{base_name}"
-            else:
-                # 如果还是无法区分，使用路径的更多部分
-                path_parts = source_path.strip('/').split('/')
-                if len(path_parts) >= 2:
-                    # 使用倒数第二个和最后一个部分
-                    unique_name = f"{path_parts[-2]}_{path_parts[-1]}"
-                else:
-                    # 最后的选择：使用完整路径的hash值
-                    import hashlib
-                    path_hash = hashlib.md5(source_path.encode()).hexdigest()[:8]
-                    unique_name = f"{base_name}_{path_hash}"
-        
-        return unique_name
 
     def format_timestamp(self, timestamp):
         """格式化时间戳"""
@@ -3128,9 +3139,12 @@ class DownloadThread(QThread):
             local_download_path = dest_path
             
             # 使用实时输出方式执行adb pull（使用/.: 仅复制目录内容）
-            command = f'adb -s {device} pull "{source_path}/." "{dest_path}"'
+            # 确保目标路径使用正确的路径分隔符
+            dest_path_normalized = dest_path.replace('\\', '/')
+            command = f'adb -s {device} pull "{source_path}/." "{dest_path_normalized}"'
             print(f"[调试] 执行命令: {command}")
             print(f"[调试] 目标本地路径: {local_download_path}")
+            print(f"[调试] 规范化目标路径: {dest_path_normalized}")
             
             # 创建进程，实时获取输出
             process = subprocess.Popen(
@@ -3229,39 +3243,50 @@ class DownloadThread(QThread):
                 # 检查是否有输出可读
                 if hasattr(select, 'select'):
                     # Unix/Linux系统
-                    ready, _, _ = select.select([process.stdout], [], [], 0.1)
+                    ready, _, _ = select.select([process.stdout, process.stderr], [], [], 0.1)
                     if ready:
-                        output = process.stdout.readline()
-                        if output:
-                            output = output.strip()
-                            print(f"[调试] 收到adb输出: {output}")
-                            
-                            # 解析adb pull的输出，查找文件传输信息
-                            if output.endswith(' files pulled') or 'files pulled' in output:
-                                # 提取传输的文件数量
-                                try:
-                                    parts = output.split()
-                                    if len(parts) >= 2:
-                                        transferred_files = int(parts[0])
-                                        progress = min(99, int((transferred_files / remote_file_count) * 100))
-                                        self.task_progress_updated.emit(device, folder_name, progress)
-                                        self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
-                                except (ValueError, IndexError):
-                                    pass
-                            elif 'pulled' in output and 'files' in output:
-                                # 另一种输出格式
-                                try:
-                                    parts = output.split()
-                                    if len(parts) >= 2:
-                                        transferred_files = int(parts[0])
-                                        progress = min(99, int((transferred_files / remote_file_count) * 100))
-                                        self.current_progress_updated.emit(progress)
-                                        self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
-                                except (ValueError, IndexError):
-                                    pass
+                        # 读取stdout
+                        if process.stdout in ready:
+                            output = process.stdout.readline()
+                            if output:
+                                output = output.strip()
+                                print(f"[调试] 收到adb输出: {output}")
+                                
+                                # 解析adb pull的输出，查找文件传输信息
+                                if output.endswith(' files pulled') or 'files pulled' in output:
+                                    # 提取传输的文件数量
+                                    try:
+                                        parts = output.split()
+                                        if len(parts) >= 2:
+                                            transferred_files = int(parts[0])
+                                            progress = min(99, int((transferred_files / remote_file_count) * 100))
+                                            self.task_progress_updated.emit(device, folder_name, progress)
+                                            self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
+                                    except (ValueError, IndexError):
+                                        pass
+                                elif 'pulled' in output and 'files' in output:
+                                    # 另一种输出格式
+                                    try:
+                                        parts = output.split()
+                                        if len(parts) >= 2:
+                                            transferred_files = int(parts[0])
+                                            progress = min(99, int((transferred_files / remote_file_count) * 100))
+                                            self.task_progress_updated.emit(device, folder_name, progress)
+                                            self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
+                                    except (ValueError, IndexError):
+                                        pass
+                        
+                        # 读取stderr
+                        if process.stderr in ready:
+                            error_output = process.stderr.readline()
+                            if error_output:
+                                error_output = error_output.strip()
+                                print(f"[调试] 收到adb错误输出: {error_output}")
+                                self.progress_updated.emit(f"警告: {error_output}")
                 else:
                     # Windows系统，使用简单的非阻塞读取
                     try:
+                        # 读取stdout
                         output = process.stdout.readline()
                         if output:
                             output = output.strip()
@@ -3290,6 +3315,13 @@ class DownloadThread(QThread):
                                         self.progress_updated.emit(f"下载进度: {transferred_files}/{remote_file_count} 文件 ({progress}%)")
                                 except (ValueError, IndexError):
                                     pass
+                        
+                        # 读取stderr
+                        error_output = process.stderr.readline()
+                        if error_output:
+                            error_output = error_output.strip()
+                            print(f"[调试] 收到adb错误输出(Windows): {error_output}")
+                            self.progress_updated.emit(f"警告: {error_output}")
                     except:
                         pass
                 
@@ -3301,29 +3333,36 @@ class DownloadThread(QThread):
             return_code = process.wait()
             print(f"[调试] 进程完成，返回码: {return_code}")
             
+            # 等待定时器线程完成最终检查
+            print(f"[调试] 等待定时器线程完成最终检查...")
+            timer_thread.join(timeout=2)  # 等待最多2秒
+            
+            # 最终检查本地文件数量
+            final_local_count = self.get_local_file_count(local_download_path)
+            print(f"[调试] 主线程最终检查，本地文件数量: {final_local_count}")
+            
             if return_code == 0:
-                # 等待定时器线程完成最终检查
-                print(f"[调试] 等待定时器线程完成最终检查...")
-                timer_thread.join(timeout=2)  # 等待最多2秒
-                
-                # 最终检查本地文件数量
-                final_local_count = self.get_local_file_count(local_download_path)
-                print(f"[调试] 主线程最终检查，本地文件数量: {final_local_count}")
-                
-                # 只有在定时器没有设置100%的情况下才设置
-                if final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
-                    self.task_progress_updated.emit(device, folder_name, 100)
-                    self.progress_updated.emit(f"✓ 下载完成，远程 {remote_file_count} 个文件，本地 {final_local_count} 个文件")
+                # 检查是否真的有文件被下载
+                if final_local_count > 0:
+                    # 只有在定时器没有设置100%的情况下才设置
+                    if final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
+                        self.task_progress_updated.emit(device, folder_name, 100)
+                        self.progress_updated.emit(f"✓ 下载完成，远程 {remote_file_count} 个文件，本地 {final_local_count} 个文件")
+                    else:
+                        final_progress = int((final_local_count / remote_file_count) * 100)
+                        self.task_progress_updated.emit(device, folder_name, final_progress)
+                        self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
+                    return True
                 else:
-                    final_progress = int((final_local_count / remote_file_count) * 100)
-                    self.task_progress_updated.emit(device, folder_name, final_progress)
-                    self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
-                
-                return True
+                    # 返回码是0但没有文件，可能是路径问题
+                    error_output = process.stderr.read()
+                    print(f"[调试] 下载完成但无文件，错误输出: {error_output}")
+                    self.progress_updated.emit(f"✗ 下载完成但无文件，可能路径错误: {error_output}")
+                    return False
             else:
                 error_output = process.stderr.read()
-                print(f"[调试] 下载失败，错误输出: {error_output}")
-                self.progress_updated.emit(f"✗ 下载失败: {error_output}")
+                print(f"[调试] 下载失败，返回码: {return_code}, 错误输出: {error_output}")
+                self.progress_updated.emit(f"✗ 下载失败 (返回码: {return_code}): {error_output}")
                 return False
                 
         except Exception as e:
