@@ -2226,54 +2226,52 @@ class FileDownloadDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 8, 16, 16)
 
-        # 来源区域
-        source_group = QWidget()
-        source_layout = QVBoxLayout(source_group)
-        source_layout.setContentsMargins(0, 0, 0, 0)
- 
-        # 置顶文件夹选择区域
-        top_folders_group = QWidget()
-        top_folders_layout = QVBoxLayout(top_folders_group)
-        top_folders_layout.setContentsMargins(0, 0, 0, 0)
-        top_folders_layout.setSpacing(6)
+        # 设备选择区域
+        device_group = QWidget()
+        device_layout = QVBoxLayout(device_group)
         
-        top_folders_title = QLabel("置顶文件夹选择:")
-        top_folders_title.setStyleSheet("font-weight: bold; color: #34495e;")
-        top_folders_layout.addWidget(top_folders_title)
+        device_title = QLabel("选择目标设备:")
+        device_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50;")
+        device_layout.addWidget(device_title)
         
-        # 创建置顶文件夹复选框（从INI加载）
-        self.top_folders_container = QWidget()
-        self.top_folders_layout = QGridLayout(self.top_folders_container)
+        # 设备列表
+        device_list_layout = QVBoxLayout()
+        self.device_list_widget = QWidget()
+        self.device_list_layout = QVBoxLayout(self.device_list_widget)
         
-        fixed_paths = self.load_fixed_source_paths()
-        self.top_folder_checkboxes = []
-        columns = 3  # 每行显示3个复选框
-        for idx, p in enumerate(fixed_paths):
-            cb = QCheckBox(p)
-            cb.setToolTip("选择此文件夹进行下载")
-            cb.stateChanged.connect(self.on_top_folder_changed)
-            row = idx // columns
-            col = idx % columns
-            self.top_folders_layout.addWidget(cb, row, col)
-            self.top_folder_checkboxes.append(cb)
-        # self.top_folders_layout.addStretch()  # 网格布局不需要addStretch()
+        device_list_layout.addWidget(self.device_list_widget)
+        device_layout.addLayout(device_list_layout)
         
-        top_folders_layout.addWidget(self.top_folders_container)
-        source_layout.addWidget(top_folders_group)
+        layout.addWidget(device_group)
         
-        # 文件夹选择区域（隐藏）
-        self.folder_selection_widget = QWidget()
-        folder_layout = QVBoxLayout(self.folder_selection_widget)
-        folder_title = QLabel("选择要下载的文件夹:")
-        folder_title.setStyleSheet("font-weight: bold; color: #34495e;")
-        folder_layout.addWidget(folder_title)
-        self.folder_checkboxes_container = QWidget()
-        self.folder_checkboxes_layout = QVBoxLayout(self.folder_checkboxes_container)
-        folder_layout.addWidget(self.folder_checkboxes_container)
-        self.folder_selection_widget.setVisible(False)
-        source_layout.addWidget(self.folder_selection_widget)
+        # 设备文件夹选择区域
+        self.device_folders_group = QWidget()
+        device_folders_layout = QVBoxLayout(self.device_folders_group)
         
-        layout.addWidget(source_group)
+        device_folders_title = QLabel("设备文件夹选择:")
+        device_folders_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50;")
+        device_folders_layout.addWidget(device_folders_title)
+        
+        # 创建滚动区域来容纳设备文件夹选择
+        self.device_folders_scroll = QScrollArea()
+        self.device_folders_scroll.setWidgetResizable(True)
+        self.device_folders_scroll.setMaximumHeight(300)  # 限制最大高度
+        self.device_folders_scroll.setMinimumHeight(150)  # 设置最小高度
+        
+        # 创建容器widget来放置设备文件夹选择
+        self.device_folders_container = QWidget()
+        self.device_folders_layout = QVBoxLayout(self.device_folders_container)
+        self.device_folders_layout.setContentsMargins(0, 0, 0, 0)
+        self.device_folders_layout.setSpacing(10)
+        
+        # 设置滚动区域的widget
+        self.device_folders_scroll.setWidget(self.device_folders_container)
+        device_folders_layout.addWidget(self.device_folders_scroll)
+        
+        # 存储设备文件夹选择的字典 {device_id: {folder_name: checkbox}}
+        self.device_folder_checkboxes = {}
+        
+        layout.addWidget(self.device_folders_group)
         
         # 目标区域
         dest_group = QWidget()
@@ -2354,24 +2352,6 @@ class FileDownloadDialog(QDialog):
         dest_layout.addLayout(subfolder_layout)
         
         layout.addWidget(dest_group)
-        
-        # 设备选择区域
-        device_group = QWidget()
-        device_layout = QVBoxLayout(device_group)
-        
-        device_title = QLabel("选择目标设备:")
-        device_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #2c3e50;")
-        device_layout.addWidget(device_title)
-        
-        # 设备列表
-        device_list_layout = QVBoxLayout()
-        self.device_list_widget = QWidget()
-        self.device_list_layout = QVBoxLayout(self.device_list_widget)
-        
-        device_list_layout.addWidget(self.device_list_widget)
-        device_layout.addLayout(device_list_layout)
-        
-        layout.addWidget(device_group)
         
         # 进度显示区域
         progress_group = QWidget()
@@ -2481,6 +2461,8 @@ class FileDownloadDialog(QDialog):
             no_device_label = QLabel("未检测到设备")
             no_device_label.setStyleSheet("color: #e74c3c; font-style: italic;")
             self.device_list_layout.addWidget(no_device_label)
+            # 清空设备文件夹选择区域
+            self.clear_device_folders()
         else:
             previously_selected = getattr(self, 'previously_selected_devices', set())
             for device in self.devices:
@@ -2493,7 +2475,7 @@ class FileDownloadDialog(QDialog):
                 # 创建复选框，显示自定义名称或原始ID
                 display_name = self.get_device_display_name(device)
                 checkbox = QCheckBox(display_name)
-                checkbox.stateChanged.connect(self.update_download_button_state)
+                checkbox.stateChanged.connect(self.on_device_selection_changed)
                 
                 # 保存复选框引用
                 self.device_checkboxes[device] = checkbox
@@ -2504,7 +2486,6 @@ class FileDownloadDialog(QDialog):
                 
                 # 创建编辑按钮
                 edit_btn = QPushButton("编辑")
-                # edit_btn.setMaximumWidth(100)
                 edit_btn.clicked.connect(lambda checked, d=device: self.edit_device_name(d))
                 
                 # 添加到容器布局
@@ -2514,7 +2495,104 @@ class FileDownloadDialog(QDialog):
                 
                 # 将容器添加到主布局
                 self.device_list_layout.addWidget(device_container)
+            
+            # 更新设备文件夹选择区域
+            self.update_device_folders()
 
+    def on_device_selection_changed(self, state):
+        """设备选择状态改变时的处理"""
+        # 更新设备文件夹选择区域
+        self.update_device_folders()
+        # 更新下载按钮状态
+        self.update_download_button_state()
+
+    def clear_device_folders(self):
+        """清空设备文件夹选择区域"""
+        # 清除现有的设备文件夹选择
+        for i in reversed(range(self.device_folders_layout.count())):
+            widget = self.device_folders_layout.itemAt(i).widget()
+            if widget:
+                widget.deleteLater()
+        
+        self.device_folder_checkboxes.clear()
+
+    def update_device_folders(self):
+        """更新设备文件夹选择区域"""
+        # 清除现有的设备文件夹选择
+        self.clear_device_folders()
+        
+        # 获取选中的设备
+        selected_devices = []
+        for device_id, checkbox in self.device_checkboxes.items():
+            if checkbox.isChecked():
+                selected_devices.append(device_id)
+        
+        if not selected_devices:
+            # 如果没有选中的设备，显示提示信息
+            no_selection_label = QLabel("请先选择设备")
+            no_selection_label.setStyleSheet("color: #7f8c8d; font-style: italic; text-align: center;")
+            self.device_folders_layout.addWidget(no_selection_label)
+            return
+        
+        # 获取固定的文件夹列表（只获取一次，所有设备共用）
+        fixed_folders = self.load_fixed_source_paths()
+        
+        if not fixed_folders:
+            # 如果没有找到文件夹，显示提示信息
+            no_folders_label = QLabel("未找到可下载的文件夹")
+            no_folders_label.setStyleSheet("color: #e74c3c; font-style: italic; text-align: center;")
+            self.device_folders_layout.addWidget(no_folders_label)
+            return
+        
+        # 为每个选中的设备创建文件夹选择区域
+        for device_id in selected_devices:
+            device_display_name = self.get_device_display_name(device_id)
+            
+            # 创建设备文件夹组
+            device_folder_group = QWidget()
+            device_folder_layout = QVBoxLayout(device_folder_group)
+            device_folder_layout.setContentsMargins(10, 5, 10, 5)
+            device_folder_layout.setSpacing(5)
+            
+            # 设备标题
+            device_title = QLabel(f"设备: {device_display_name}")
+            device_title.setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 13px;")
+            device_folder_layout.addWidget(device_title)
+            
+            # 创建文件夹复选框网格
+            folders_grid = QWidget()
+            folders_grid_layout = QGridLayout(folders_grid)
+            folders_grid_layout.setContentsMargins(0, 0, 0, 0)
+            folders_grid_layout.setSpacing(5)
+            
+            # 初始化设备文件夹复选框字典
+            self.device_folder_checkboxes[device_id] = {}
+            
+            columns = 3  # 每行显示3个复选框
+            for idx, folder in enumerate(fixed_folders):
+                checkbox = QCheckBox(folder)
+                checkbox.setToolTip(f"选择设备 {device_display_name} 的文件夹: {folder}")
+                checkbox.stateChanged.connect(self.update_download_button_state)
+                
+                row = idx // columns
+                col = idx % columns
+                folders_grid_layout.addWidget(checkbox, row, col)
+                
+                # 保存复选框引用
+                self.device_folder_checkboxes[device_id][folder] = checkbox
+            
+            device_folder_layout.addWidget(folders_grid)
+            
+            # 添加到主布局
+            self.device_folders_layout.addWidget(device_folder_group)
+        
+        # 添加弹性空间
+        self.device_folders_layout.addStretch()
+
+    def get_device_folders(self, device_id):
+        """获取指定设备的文件夹列表（使用INI文件中定义的固定路径）"""
+        # 直接使用INI文件中定义的固定路径，不进行动态检测
+        return self.load_fixed_source_paths()
 
     def load_folder_contents(self, folder_path):
         """加载文件夹内容"""
@@ -2558,16 +2636,6 @@ class FileDownloadDialog(QDialog):
                 pass
 
 
-    def on_manual_select_changed(self, state):
-        """手动选择复选框状态改变 (此功能已禁用，仅用于内部状态更新)"""
-        # Manual selection is no longer a user-facing feature.
-        # This method is kept for completeness but should not affect UI visibility of folder_selection_widget.
-        self.update_download_button_state()
-
-    def on_top_folder_changed(self, state):
-        """置顶文件夹复选框状态改变"""
-        # 不再重置目标文件夹地址，只更新下载按钮状态
-        self.update_download_button_state()
 
     def update_download_button_state(self):
         """更新下载按钮状态"""
@@ -2578,35 +2646,42 @@ class FileDownloadDialog(QDialog):
                 has_selected_device = True
                 break
         
-        # 检查是否有选中的置顶文件夹
-        has_selected_folder = any(cb.isChecked() for cb in self.top_folder_checkboxes)
+        # 检查是否有选中的设备文件夹
+        has_selected_folders = False
+        if has_selected_device:
+            for device_id, folder_checkboxes in self.device_folder_checkboxes.items():
+                if device_id in self.device_checkboxes and self.device_checkboxes[device_id].isChecked():
+                    for folder_name, checkbox in folder_checkboxes.items():
+                        if checkbox.isChecked():
+                            has_selected_folders = True
+                            break
+                if has_selected_folders:
+                    break
         
         # 检查是否有目标路径
         has_destination = bool(self.dest_location_input.text().strip())
         
-        self.download_btn.setEnabled(has_selected_device and has_selected_folder and has_destination)
+        self.download_btn.setEnabled(has_selected_device and has_selected_folders and has_destination)
 
     def start_download(self):
         """开始下载"""
         
-        # 获取选中的设备（使用原始设备ID）
-        selected_devices = []
+        # 获取选中的设备和文件夹组合
+        device_folder_combinations = []
         for device_id, checkbox in self.device_checkboxes.items():
             if checkbox.isChecked():
-                selected_devices.append(device_id)
+                device_display_name = self.get_device_display_name(device_id)
+                if device_id in self.device_folder_checkboxes:
+                    for folder_name, folder_checkbox in self.device_folder_checkboxes[device_id].items():
+                        if folder_checkbox.isChecked():
+                            device_folder_combinations.append({
+                                'device_id': device_id,
+                                'device_display_name': device_display_name,
+                                'folder_name': folder_name
+                            })
         
-        if not selected_devices:
-            QMessageBox.warning(self, "警告", "请选择至少一个设备！")
-            return
-        
-        # 获取选中的置顶文件夹
-        selected_folders = []
-        for cb in self.top_folder_checkboxes:
-            if cb.isChecked():
-                selected_folders.append(cb.text())
-        
-        if not selected_folders:
-            QMessageBox.warning(self, "警告", "请选择至少一个文件夹！")
+        if not device_folder_combinations:
+            QMessageBox.warning(self, "警告", "请选择至少一个设备和文件夹组合！")
             return
         
         # 获取目标路径
@@ -2693,15 +2768,13 @@ class FileDownloadDialog(QDialog):
             pass
         
         # 创建个体进度条
-        self.create_individual_progress_bars(selected_devices, selected_folders)
+        self.create_individual_progress_bars(device_folder_combinations)
         
         # 创建下载线程
         self.download_thread = DownloadThread(
-            selected_devices, 
-            selected_folders, 
+            device_folder_combinations, 
             dest_path, 
             self.subfolder_combo.currentText(),
-            True,  # 总是使用手动模式，因为我们现在有明确的文件夹列表
             self.device_name_mapping,  # 传递设备名称映射
             self.custom_subfolder_input.text().strip()  # 传递自定义子文件夹名称
         )
@@ -2718,50 +2791,52 @@ class FileDownloadDialog(QDialog):
 
 
 
-    def create_individual_progress_bars(self, selected_devices, selected_folders):
-        """为选中的设备和文件夹创建进度条"""
+    def create_individual_progress_bars(self, device_folder_combinations):
+        """为选中的设备和文件夹组合创建进度条"""
         # 清除现有的进度条
         self.clear_progress_bars()
         
         # 为每个设备-文件夹组合创建进度条
-        for device_id in selected_devices:
-            device_display_name = self.device_name_mapping.get(device_id, device_id)
-            for folder in selected_folders:
-                # 创建进度条容器
-                progress_container = QWidget()
-                progress_layout = QHBoxLayout(progress_container)
-                progress_layout.setContentsMargins(0, 0, 0, 0)
-                progress_layout.setSpacing(5)
-                
-                # 创建标签
-                label = QLabel(f"{device_display_name} - {folder}")
-                label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 150px;")
-                label.setWordWrap(True)
-                
-                # 创建进度条
-                progress_bar = QProgressBar()
-                progress_bar.setRange(0, 100)
-                progress_bar.setValue(0)
-                progress_bar.setFormat("")  # 不显示内置百分比
-                progress_bar.setMinimumWidth(100)
-                
-                # 创建百分比标签
-                percentage_label = QLabel("0%")
-                percentage_label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 40px;")
-                percentage_label.setAlignment(Qt.AlignCenter)
-                
-                # 添加到布局
-                progress_layout.addWidget(label)
-                progress_layout.addWidget(progress_bar)
-                progress_layout.addWidget(percentage_label)
-                progress_layout.addStretch()
-                
-                # 添加到主布局
-                self.progress_bars_layout.addWidget(progress_container)
-                
-                # 存储引用
-                key = f"{device_id}:{folder}"
-                self.progress_bars_dict[key] = (progress_bar, label, percentage_label)
+        for combination in device_folder_combinations:
+            device_id = combination['device_id']
+            device_display_name = combination['device_display_name']
+            folder_name = combination['folder_name']
+            
+            # 创建进度条容器
+            progress_container = QWidget()
+            progress_layout = QHBoxLayout(progress_container)
+            progress_layout.setContentsMargins(0, 0, 0, 0)
+            progress_layout.setSpacing(5)
+            
+            # 创建标签
+            label = QLabel(f"{device_display_name} - {folder_name}")
+            label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 150px;")
+            label.setWordWrap(True)
+            
+            # 创建进度条
+            progress_bar = QProgressBar()
+            progress_bar.setRange(0, 100)
+            progress_bar.setValue(0)
+            progress_bar.setFormat("")  # 不显示内置百分比
+            progress_bar.setMinimumWidth(100)
+            
+            # 创建百分比标签
+            percentage_label = QLabel("0%")
+            percentage_label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 40px;")
+            percentage_label.setAlignment(Qt.AlignCenter)
+            
+            # 添加到布局
+            progress_layout.addWidget(label)
+            progress_layout.addWidget(progress_bar)
+            progress_layout.addWidget(percentage_label)
+            progress_layout.addStretch()
+            
+            # 添加到主布局
+            self.progress_bars_layout.addWidget(progress_container)
+            
+            # 存储引用
+            key = f"{device_id}:{folder_name}"
+            self.progress_bars_dict[key] = (progress_bar, label, percentage_label)
         
         # 如果没有进度条，显示提示信息
         if not self.progress_bars_dict:
@@ -2883,18 +2958,16 @@ class DownloadThread(QThread):
     # 新增进度相关信号
     task_progress_updated = pyqtSignal(str, str, int)  # 设备ID, 文件夹名, 进度百分比
     
-    def __init__(self, devices, folders, dest_path, subfolder_format, is_manual_mode, device_name_mapping=None, custom_subfolder_name=None):
+    def __init__(self, device_folder_combinations, dest_path, subfolder_format, device_name_mapping=None, custom_subfolder_name=None):
         super().__init__()
-        self.devices = devices
-        self.folders = folders
+        self.device_folder_combinations = device_folder_combinations
         self.dest_path = dest_path
         self.subfolder_format = subfolder_format
-        self.is_manual_mode = is_manual_mode
         self.device_name_mapping = device_name_mapping or {}
         self.custom_subfolder_name = custom_subfolder_name or ""
         
         # 计算总任务数
-        self.total_tasks = len(devices) * len(folders)
+        self.total_tasks = len(device_folder_combinations)
         self.completed_tasks = 0
     
     def run(self):
@@ -2928,70 +3001,68 @@ class DownloadThread(QThread):
             return  # 直接返回，不发送download_finished信号
         
         success_count = 0
-        failed_devices = []
+        failed_combinations = []
         
-        for device in self.devices:
+        for combination in self.device_folder_combinations:
             try:
-                # 获取设备显示名称
-                device_display_name = self.device_name_mapping.get(device, device)
-                self.progress_updated.emit(f"正在处理设备: {device_display_name}")
+                device_id = combination['device_id']
+                device_display_name = combination['device_display_name']
+                folder_name = combination['folder_name']
                 
-                if self.is_manual_mode:
-                    # 手动模式：按所选顶层文件夹分别创建目录: 日期/顶层文件夹/设备名
-                    for folder in self.folders:
-                        self.progress_updated.emit(f"正在下载文件夹: {folder}")
-                        
-                        # 发送任务开始信号
-                        self.task_progress_updated.emit(device, folder, 0)
-                        
-                        # 规范化源路径
-                        if folder.startswith("sdcard/") or folder.startswith("data/"):
-                            source_path = f"/{folder}"
-                        else:
-                            source_path = f"/sdcard/{folder}"
-                        
-                        # 目标目录: <dest>/<timestamp>/<top_folder_name>/<device_display_name>
-                        # 智能生成文件夹名，避免同名冲突
-                        top_folder_name = self.generate_unique_folder_name(source_path, self.folders)
-                        top_folder_dir = os.path.join(timestamp_folder, top_folder_name)
-                        try:
-                            os.makedirs(top_folder_dir, exist_ok=True)
-                        except Exception as e:
-                            self.progress_updated.emit(f"无法创建顶层文件夹 '{top_folder_name}': {str(e)}")
-                            failed_devices.append(device)
-                            continue
-                        
-                        device_folder = os.path.join(top_folder_dir, device_display_name)
-                        try:
-                            os.makedirs(device_folder, exist_ok=True)
-                        except Exception as e:
-                            self.progress_updated.emit(f"无法创建设备文件夹: {str(e)}")
-                            failed_devices.append(device)
-                            continue
-                        
-                        # 仅拉取目录内容，避免嵌套一层同名目录
-                        result = self.execute_adb_pull(device, source_path, device_folder, folder)
-                        
-                        if result:
-                            self.progress_updated.emit(f"✓ 文件夹 {folder} 下载成功")
-                            self.task_progress_updated.emit(device, folder, 100)
-                        else:
-                            self.progress_updated.emit(f"✗ 文件夹 {folder} 下载失败")
-                            self.task_progress_updated.emit(device, folder, 0)
-                        
-                        # 更新任务完成数
-                        self.completed_tasks += 1
+                self.progress_updated.emit(f"正在处理设备: {device_display_name}, 文件夹: {folder_name}")
                 
-                success_count += 1
-                self.progress_updated.emit(f"设备 {device_display_name} 处理完成")
+                # 发送任务开始信号
+                self.task_progress_updated.emit(device_id, folder_name, 0)
+                
+                # 规范化源路径
+                if folder_name.startswith("sdcard/") or folder_name.startswith("data/"):
+                    source_path = f"/{folder_name}"
+                else:
+                    source_path = f"/sdcard/{folder_name}"
+                
+                # 目标目录: <dest>/<timestamp>/<top_folder_name>/<device_display_name>
+                # 智能生成文件夹名，避免同名冲突
+                top_folder_name = self.generate_unique_folder_name(source_path, [folder_name])
+                top_folder_dir = os.path.join(timestamp_folder, top_folder_name)
+                try:
+                    os.makedirs(top_folder_dir, exist_ok=True)
+                except Exception as e:
+                    self.progress_updated.emit(f"无法创建顶层文件夹 '{top_folder_name}': {str(e)}")
+                    failed_combinations.append(combination)
+                    continue
+                
+                device_folder = os.path.join(top_folder_dir, device_display_name)
+                try:
+                    os.makedirs(device_folder, exist_ok=True)
+                except Exception as e:
+                    self.progress_updated.emit(f"无法创建设备文件夹: {str(e)}")
+                    failed_combinations.append(combination)
+                    continue
+                
+                # 仅拉取目录内容，避免嵌套一层同名目录
+                result = self.execute_adb_pull(device_id, source_path, device_folder, folder_name)
+                
+                if result:
+                    self.progress_updated.emit(f"✓ 设备 {device_display_name} 文件夹 {folder_name} 下载成功")
+                    self.task_progress_updated.emit(device_id, folder_name, 100)
+                    success_count += 1
+                else:
+                    self.progress_updated.emit(f"✗ 设备 {device_display_name} 文件夹 {folder_name} 下载失败")
+                    self.task_progress_updated.emit(device_id, folder_name, 0)
+                    failed_combinations.append(combination)
+                
+                # 更新任务完成数
+                self.completed_tasks += 1
                 
             except Exception as e:
-                device_display_name = self.device_name_mapping.get(device, device)
-                self.progress_updated.emit(f"设备 {device_display_name} 处理失败: {str(e)}")
-                failed_devices.append(device)
+                device_display_name = combination.get('device_display_name', 'Unknown')
+                folder_name = combination.get('folder_name', 'Unknown')
+                self.progress_updated.emit(f"设备 {device_display_name} 文件夹 {folder_name} 处理失败: {str(e)}")
+                failed_combinations.append(combination)
         
         # 只有在正常完成下载时才发送完成信号
-        self.download_finished.emit(success_count, len(self.devices), failed_devices)
+        failed_devices = list(set([combo['device_id'] for combo in failed_combinations]))
+        self.download_finished.emit(success_count, len(self.device_folder_combinations), failed_devices)
     
     def generate_unique_folder_name(self, source_path, all_folders):
         """智能生成唯一的文件夹名，避免同名冲突"""
