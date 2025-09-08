@@ -2506,14 +2506,27 @@ class FileDownloadDialog(QDialog):
 
         self.progress_scroll_area = QScrollArea()
         self.progress_scroll_area.setWidgetResizable(True)
-        self.progress_scroll_area.setMaximumHeight(200)  # 限制最大高度
-        self.progress_scroll_area.setMinimumHeight(100)  # 设置最小高度
+        # 自适应窗口大小：不限制高度，并设置扩展的尺寸策略
+        self.progress_scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 让内容贴顶贴左，避免顶部空白
+        self.progress_scroll_area.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        # 移除边框和额外边距，减少视觉空白
+        self.progress_scroll_area.setFrameStyle(0)
+        self.progress_scroll_area.setContentsMargins(0, 0, 0, 0)
+        # 仅在需要时显示垂直滚动条，禁用水平滚动条
+        self.progress_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.progress_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
-        # 创建容器widget来放置进度条
+        # 创建容器widget来放置进度条（两列网格布局）
         self.progress_container = QWidget()
-        self.progress_bars_layout = QVBoxLayout(self.progress_container)
+        from PyQt5.QtWidgets import QGridLayout
+        self.progress_bars_layout = QGridLayout(self.progress_container)
         self.progress_bars_layout.setContentsMargins(0, 0, 0, 0)
-        self.progress_bars_layout.setSpacing(5)
+        self.progress_bars_layout.setHorizontalSpacing(10)
+        self.progress_bars_layout.setVerticalSpacing(5)
+        self.progress_bars_layout.setColumnStretch(0, 1)
+        self.progress_bars_layout.setColumnStretch(1, 1)
+        self.progress_bars_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         
         # 设置滚动区域的widget
         self.progress_scroll_area.setWidget(self.progress_container)
@@ -2958,8 +2971,8 @@ class FileDownloadDialog(QDialog):
         # 清除现有的进度条
         self.clear_progress_bars()
         
-        # 为每个设备-文件夹组合创建进度条
-        for combination in device_folder_combinations:
+        # 为每个设备-文件夹组合创建进度条（两列显示）
+        for idx, combination in enumerate(device_folder_combinations):
             device_id = combination['device_id']
             device_display_name = combination['device_display_name']
             folder_path = combination['folder_path']
@@ -2996,8 +3009,10 @@ class FileDownloadDialog(QDialog):
             progress_layout.addWidget(percentage_label)
             progress_layout.addStretch()
             
-            # 添加到主布局
-            self.progress_bars_layout.addWidget(progress_container)
+            # 添加到网格布局（两列）
+            row = idx // 2
+            col = idx % 2
+            self.progress_bars_layout.addWidget(progress_container, row, col)
             
             # 存储引用，使用路径作为键（因为task_progress_updated信号使用路径）
             key = f"{device_id}:{folder_path}"
@@ -3007,7 +3022,8 @@ class FileDownloadDialog(QDialog):
         if not self.progress_bars_dict:
             no_tasks_label = QLabel("没有选中的下载任务")
             no_tasks_label.setStyleSheet("color: #7f8c8d; font-style: italic; text-align: center;")
-            self.progress_bars_layout.addWidget(no_tasks_label)
+            # 跨两列显示
+            self.progress_bars_layout.addWidget(no_tasks_label, 0, 0, 1, 2)
 
     def clear_progress_bars(self):
         """清除所有进度条"""
