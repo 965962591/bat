@@ -39,6 +39,7 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
         super().__init__(parent)
         self.excluded_paths = set()
         self.hide_all = False
+        self.included_paths = set()
 
     def set_excluded(self, paths):
         self.excluded_paths = set(paths or [])
@@ -52,6 +53,34 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
         self.hide_all = bool(flag)
         self.invalidateFilter()
 
+    def set_included(self, paths):
+        # 归一化路径，避免分隔符大小写差异
+        normed = set()
+        for p in (paths or []):
+            try:
+                normed.add(os.path.normcase(os.path.normpath(p)))
+            except Exception:
+                normed.add(p)
+        self.included_paths = normed
+        self.invalidateFilter()
+
+    def clear_included(self):
+        self.included_paths.clear()
+        self.invalidateFilter()
+
+    def remove_from_included(self, paths):
+        changed = False
+        for p in (paths or []):
+            try:
+                key = os.path.normcase(os.path.normpath(p))
+            except Exception:
+                key = p
+            if key in self.included_paths:
+                self.included_paths.discard(key)
+                changed = True
+        if changed:
+            self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row, source_parent):
         if self.hide_all:
             return False
@@ -63,9 +92,24 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
             file_path = model.filePath(source_index)
         except Exception:
             return True
+        # 统一规范化
+        try:
+            file_path_norm = os.path.normcase(os.path.normpath(file_path))
+        except Exception:
+            file_path_norm = file_path
+        # 先应用排除规则（排除优先于包含）
         for p in self.excluded_paths:
-            if file_path == p or file_path.startswith(p + os.sep):
+            if file_path_norm == p or file_path_norm.startswith(p + os.sep):
                 return False
+        # 如果设置了包含白名单，仅显示白名单文件与其祖先目录
+        if self.included_paths:
+            for p in self.included_paths:
+                if file_path_norm == p:
+                    return True
+                # file_path 是 p 的祖先（目录）
+                if p.startswith(file_path_norm + os.sep):
+                    return True
+            return False
         return True
 
 
@@ -74,6 +118,9 @@ class PreviewDialog(QDialog):
     def __init__(self, rename_data):
         super().__init__()
         self.setWindowTitle("重命名预览")
+        icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
+        self.setWindowIcon(QIcon(icon_path))
+
         self.resize(1200, 800)
 
         layout = QVBoxLayout()
@@ -125,7 +172,7 @@ class FileOrganizer(QWidget):
 
         # 左侧布局
         left_layout = QVBoxLayout()
-        self.folder_count_label = QLabel("文件夹数量: 0", self)
+        # self.folder_count_label = QLabel("文件夹数量: 0", self)
         
         # 使用QTreeView和QFileSystemModel实现文件预览
         self.left_tree = QTreeView(self)
@@ -150,12 +197,12 @@ class FileOrganizer(QWidget):
         # 连接选择变化信号
         self.left_tree.selectionModel().selectionChanged.connect(self.on_left_tree_selection_changed)
         
-        left_layout.addWidget(self.folder_count_label)
+        # left_layout.addWidget(self.folder_count_label)
         left_layout.addWidget(self.left_tree)
 
         # 右侧布局
         right_layout = QVBoxLayout()
-        self.file_count_label = QLabel("文件总数: 0", self)
+        # self.file_count_label = QLabel("文件总数: 0", self)
         
         # 右侧使用QTreeView和QFileSystemModel来显示选中的文件
         self.right_tree = QTreeView(self)
@@ -190,7 +237,7 @@ class FileOrganizer(QWidget):
         # 隐藏列标题
         self.right_tree.header().hide()
         
-        right_layout.addWidget(self.file_count_label)
+        # right_layout.addWidget(self.file_count_label)
         right_layout.addWidget(self.right_tree)
 
         # 右侧下方布局
@@ -259,19 +306,19 @@ class FileOrganizer(QWidget):
         middle_button_layout = QVBoxLayout()
         self.add_button = QPushButton("增加", self)
         self.add_button.clicked.connect(self.add_to_right)
-        self.add_all_button = QPushButton("增加全部", self)
-        self.add_all_button.clicked.connect(self.add_all_to_right)
+        # self.add_all_button = QPushButton("增加全部", self)
+        # self.add_all_button.clicked.connect(self.add_all_to_right)
         self.remove_button = QPushButton("移除", self)
         self.remove_button.clicked.connect(self.remove_from_right)
 
-        # 新增"移除全部"按钮
-        self.remove_all_button = QPushButton("移除全部", self)
-        self.remove_all_button.clicked.connect(self.remove_all_from_right)
+        # # 新增"移除全部"按钮
+        # self.remove_all_button = QPushButton("移除全部", self)
+        # self.remove_all_button.clicked.connect(self.remove_all_from_right)
 
         middle_button_layout.addWidget(self.add_button)
-        middle_button_layout.addWidget(self.add_all_button)
+        # middle_button_layout.addWidget(self.add_all_button)
         middle_button_layout.addWidget(self.remove_button)
-        middle_button_layout.addWidget(self.remove_all_button)  # 添加"移除全部"按钮
+        # middle_button_layout.addWidget(self.remove_all_button)  # 添加"移除全部"按钮
 
         # 新建列表布局，添加左侧布局、中间按钮组件布局、右侧布局
         list_layout = QHBoxLayout()
@@ -329,7 +376,7 @@ class FileOrganizer(QWidget):
                         # 信息提示框
                         QMessageBox.information(self, "提示", "传入的文件路径不存在！")
                         break
-                self.update_file_count()
+                # self.update_file_count()
             else:
                 # 信息提示框
                 QMessageBox.information(
@@ -395,21 +442,36 @@ class FileOrganizer(QWidget):
         else:
             target_dir = common_parent(unique_dirs)
         if target_dir and os.path.isdir(target_dir):
-            self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(target_dir)))
-            # 移除集合需清空，避免之前过滤影响新的显示
+            # 清空之前的过滤状态并准备新的过滤
             self._right_excluded_paths = []
             self.right_proxy.clear_excluded()
             self.right_proxy.set_hide_all(False)
+            # 右侧仅显示所选文件（若选择的是文件）
+            selected_files = []
+            for idx, p in zip(selected, paths):
+                if os.path.isfile(p):
+                    selected_files.append(p)
+            if selected_files:
+                self.right_proxy.set_included(set(selected_files))
+            else:
+                self.right_proxy.clear_included()
+            # 最后再设置右侧根到共同父目录（确保过滤状态已生效）
+            self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(target_dir)))
             # 取消空目录根
             self._empty_dir = None
-            self.update_file_count()
+            # 强制刷新与计数
+            self.right_proxy.invalidate()
+            # self.update_file_count()
 
     def add_all_to_right(self):
         root_path = self.folder_input.text()
         if os.path.isdir(root_path):
             # 设置右侧模型的根路径为当前选择的文件夹
             self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(root_path)))
-        self.update_file_count()
+            # 显示整个文件夹（清除仅包含过滤）
+            if hasattr(self, 'right_proxy'):
+                self.right_proxy.clear_included()
+        # self.update_file_count()
 
     def remove_from_right(self):
         # 只移除右侧选中的条目（通过过滤器隐藏选中的路径）
@@ -418,6 +480,7 @@ class FileOrganizer(QWidget):
             return
         # 收集选中项对应的源模型路径
         excluded = list(getattr(self, "_right_excluded_paths", []))
+        removed_files = []
         for proxy_index in selected_indexes:
             if proxy_index.column() != 0:
                 continue
@@ -427,17 +490,32 @@ class FileOrganizer(QWidget):
             file_path = self.right_model.filePath(source_index)
             if file_path:
                 excluded.append(file_path)
+                removed_files.append(file_path)
         # 去重并设置过滤
-        self._right_excluded_paths = list(dict.fromkeys(excluded))
+        self._right_excluded_paths = [os.path.normcase(os.path.normpath(p)) for p in dict.fromkeys(excluded)]
         self.right_proxy.set_excluded(self._right_excluded_paths)
+        # 若当前处于白名单模式（白名单非空），同步从白名单删除被移除的文件
+        if hasattr(self, 'right_proxy') and getattr(self.right_proxy, 'included_paths', None):
+            if len(self.right_proxy.included_paths) > 0:
+                self.right_proxy.remove_from_included(removed_files)
+                # 如果白名单被清空，则右侧显示为空目录（避免回退到整个文件夹视图）
+                if len(self.right_proxy.included_paths) == 0:
+                    try:
+                        if not self._empty_dir or not os.path.exists(self._empty_dir):
+                            self._empty_dir = tempfile.mkdtemp(prefix="rename_empty_")
+                        empty_index = self.right_proxy.mapFromSource(self.right_model.index(self._empty_dir))
+                        self.right_tree.setRootIndex(empty_index)
+                    except Exception:
+                        self.right_tree.setRootIndex(QModelIndex())
         # 同步更新计数
-        self.update_file_count()
+        # self.update_file_count()
 
     def remove_all_from_right(self):
         # 清空右侧视图（重置过滤并置空根索引）
         self._right_excluded_paths = []
         if hasattr(self, 'right_proxy'):
             self.right_proxy.clear_excluded()
+            self.right_proxy.clear_included()
             # 直接隐藏全部内容，避免显示驱动器列表
             self.right_proxy.set_hide_all(False)
         # 将右侧根设置为一个临时空目录，确保界面为空
@@ -449,15 +527,15 @@ class FileOrganizer(QWidget):
         except Exception:
             # 兜底：设置无效索引
             self.right_tree.setRootIndex(QModelIndex())
-        self.update_file_count()
+        # self.update_file_count()
 
-    def update_file_count(self):
-        """统计右侧当前可见（未被过滤）的文件数量"""
-        file_count = 0
-        root_proxy_index = self.right_tree.rootIndex()
-        if root_proxy_index.isValid():
-            file_count = self.count_visible_files(root_proxy_index)
-        self.file_count_label.setText(f"文件总数: {file_count}")
+    # def update_file_count(self):
+    #     """统计右侧当前可见（未被过滤）的文件数量"""
+    #     file_count = 0
+    #     root_proxy_index = self.right_tree.rootIndex()
+    #     if root_proxy_index.isValid():
+    #         file_count = self.count_visible_files(root_proxy_index)
+    #     self.file_count_label.setText(f"文件总数: {file_count}")
 
     def count_visible_files(self, dir_proxy_index):
         """递归统计代理模型下可见文件数量（包含子目录）。"""
@@ -817,9 +895,9 @@ class FileOrganizer(QWidget):
                 folder_count = "无权限访问"
             
             # 显示当前选中文件夹的信息
-            folder_name = os.path.basename(folder_path) or folder_path
-            self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
-            self.update_file_count()
+            # folder_name = os.path.basename(folder_path) or folder_path
+            # self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
+            # self.update_file_count()
 
     def on_left_tree_selection_changed(self, selected, deselected):
         """处理左侧文件树选择变化"""
@@ -853,8 +931,8 @@ class FileOrganizer(QWidget):
             folder_count = "无权限访问"
         
         # 显示当前选中文件夹的信息
-        folder_name = os.path.basename(folder_path) or folder_path
-        self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
+        # folder_name = os.path.basename(folder_path) or folder_path
+        # self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
 
     def on_folder_input_enter(self):
         folder = self.folder_input.text()
