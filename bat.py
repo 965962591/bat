@@ -363,10 +363,10 @@ class LogVerboseMaskApp(QMainWindow):
         if ok and new_name.strip():
             new_name = new_name.strip()
             
-            # 检查名称是否已被其他设备使用
-            if new_name in self.device_name_mapping.values() and new_name != current_name:
-                QMessageBox.warning(self, "错误", "该名称已被其他设备使用，请选择其他名称。")
-                return
+            # 若其他设备已使用相同名称，则覆盖：移除其他设备上的该名称
+            for other_device_id, other_name in list(self.device_name_mapping.items()):
+                if other_device_id != device_id and other_name == new_name:
+                    self.device_name_mapping.pop(other_device_id, None)
             
             # 更新映射
             if new_name == device_id:
@@ -2165,10 +2165,10 @@ class FileDownloadDialog(QDialog):
         if ok and new_name.strip():
             new_name = new_name.strip()
             
-            # 检查名称是否已被其他设备使用
-            if new_name in self.device_name_mapping.values() and new_name != current_name:
-                QMessageBox.warning(self, "错误", "该名称已被其他设备使用，请选择其他名称。")
-                return
+            # 若其他设备已使用相同名称，则覆盖：移除其他设备上的该名称
+            for other_device_id, other_name in list(self.device_name_mapping.items()):
+                if other_device_id != device_id and other_name == new_name:
+                    self.device_name_mapping.pop(other_device_id, None)
             
             # 更新映射
             if new_name == device_id:
@@ -3211,19 +3211,19 @@ class DownloadThread(QThread):
                 else:
                     source_path = f"/sdcard/{folder_path}"
                 
-                # 目标目录: <dest>/<timestamp>/<device_display_name>/<custom_name>
-                # 先按设备分组，再按自定义名称创建子文件夹
-                device_folder = os.path.join(timestamp_folder, device_display_name)
-                custom_folder = os.path.join(device_folder, custom_name)
+                # 目标目录: <dest>/<timestamp>/<custom_name>/<device_display_name>
+                # 先按自定义名称分组，再按设备创建子文件夹
+                custom_folder = os.path.join(timestamp_folder, custom_name)
+                device_folder = os.path.join(custom_folder, device_display_name)
                 try:
-                    os.makedirs(custom_folder, exist_ok=True)
+                    os.makedirs(device_folder, exist_ok=True)
                 except Exception as e:
-                    self.progress_updated.emit(f"无法创建文件夹 '{custom_folder}': {str(e)}")
+                    self.progress_updated.emit(f"无法创建文件夹 '{device_folder}': {str(e)}")
                     failed_combinations.append(combination)
                     continue
                 
                 # 仅拉取目录内容，避免嵌套一层同名目录
-                result = self.execute_adb_pull(device_id, source_path, custom_folder, folder_path)
+                result = self.execute_adb_pull(device_id, source_path, device_folder, folder_path)
                 
                 if result:
                     self.progress_updated.emit(f"✓ 设备 {device_display_name} 文件夹 {custom_name} 下载成功")
