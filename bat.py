@@ -39,7 +39,7 @@ import configparser
 from datetime import datetime
 
 from qt_material import apply_stylesheet
-
+from rename import FileOrganizer
 # 全局变量定义缓存目录
 APP_CACHE_DIR = os.path.join(os.path.dirname(__file__), "app_cache")
 
@@ -781,6 +781,7 @@ class LogVerboseMaskApp(QMainWindow):
         device_label.setToolTip("选择设备需要执行的设备")
         self.device_combo = QComboBox()
         self.device_combo.setMinimumWidth(150)  # 设置最小宽度
+        # self.device_combo.setMaximumWidth(35)  # 设置最大宽度
         self.device_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # 设置大小策略
         refresh_button = QPushButton("刷新")
         refresh_button.setToolTip("刷新设备列表")
@@ -2400,7 +2401,10 @@ class FileDownloadDialog(QDialog):
         self.browse_dest_btn = QPushButton("浏览")
         self.browse_dest_btn.setToolTip("浏览目标文件夹")
         self.open_dest_btn = QPushButton("打开")
-        self.open_dest_btn.setToolTip("打开目标文件夹")
+        self.open_dest_btn.setToolTip("打开目标文件夹")        # 添加重命名功能按钮
+        rename_btn = QPushButton("重命名")
+        rename_btn.setToolTip("启动文件重命名工具")
+        rename_btn.clicked.connect(self.open_rename_tool)
         self.open_dest_btn.clicked.connect(self.open_target_folder)
         self.browse_dest_btn.clicked.connect(self.browse_destination)
         
@@ -2408,6 +2412,7 @@ class FileDownloadDialog(QDialog):
         dest_location_layout.addWidget(self.dest_location_input)
         dest_location_layout.addWidget(self.browse_dest_btn)
         dest_location_layout.addWidget(self.open_dest_btn)
+        dest_location_layout.addWidget(rename_btn)
         dest_layout.addLayout(dest_location_layout)
         
         # 子文件夹创建选项
@@ -2444,12 +2449,24 @@ class FileDownloadDialog(QDialog):
         subfolder_example = self.subfolder_example
         subfolder_example.setStyleSheet("color: #7f8c8d; font-size: 12px;")
         
-        # 自定义输入框
+        # 自定义输入框（改为可编辑下拉列表）
         custom_label = QLabel("自定义名称:")
-        self.custom_subfolder_input = QLineEdit()
+        self.custom_subfolder_input = QComboBox()
+        self.custom_subfolder_input.setEditable(True)  # 允许用户输入
         self.custom_subfolder_input.setPlaceholderText("留空使用日期格式，请输入自定义文件名如:第一轮FT")
         self.custom_subfolder_input.setToolTip("留空使用日期格式，请输入自定义文件名如:第一轮FT")
         self.custom_subfolder_input.setMinimumWidth(500)  # 设置最小宽度确保文本显示完整
+        
+        # 添加默认选项
+        default_options = [
+            "第一轮FT",
+            "第二轮FT", 
+            "第三轮FT",
+            "第四轮FT",
+            "第五轮FT",
+            "回归测试"
+        ]
+        self.custom_subfolder_input.addItems(default_options)
         
         # 将所有控件添加到水平布局中
         subfolder_layout.addWidget(subfolder_label)
@@ -2499,6 +2516,7 @@ class FileDownloadDialog(QDialog):
         
         refresh_devices_btn = QPushButton("刷新设备")
         refresh_devices_btn.clicked.connect(self.refresh_devices)
+        
         
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.close)
@@ -2903,7 +2921,7 @@ class FileDownloadDialog(QDialog):
             dest_path, 
             self.subfolder_combo.currentText(),
             self.device_name_mapping,  # 传递设备名称映射
-            self.custom_subfolder_input.text().strip()  # 传递自定义子文件夹名称
+            self.custom_subfolder_input.currentText().strip()  # 传递自定义子文件夹名称
         )
         self.download_thread.download_finished.connect(self.download_finished)
         self.download_thread.folder_not_found.connect(self.handle_folder_not_found)  # 连接新信号
@@ -3067,6 +3085,26 @@ class FileDownloadDialog(QDialog):
             
             # 更新下载按钮状态
             self.update_download_button_state()
+
+    def open_rename_tool(self):
+        """打开文件重命名工具"""
+        try:
+            # 获取当前设置的目标路径
+            target_path = self.dest_location_input.text().strip()
+            if not target_path or not os.path.exists(target_path):
+                QMessageBox.warning(self, "路径错误", "请先设置有效的目标路径！")
+                return
+            
+            # 启动FileOrganizer重命名工具，并传入目标路径
+            self.file_organizer = FileOrganizer()
+            # 设置文件夹路径
+            self.file_organizer.folder_input.setText(target_path)
+            self.file_organizer.populate_left_list(target_path)
+            self.file_organizer.show()
+            print(f"已启动文件重命名工具，路径: {target_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"启动重命名工具失败: {str(e)}")
+            print(f"启动重命名工具失败: {str(e)}")
 
     def closeEvent(self, event):
         """窗口关闭事件"""
