@@ -8,9 +8,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QPushButton,
-    QTreeWidget,
     QMessageBox,
-    QTreeWidgetItem,
     QFileDialog,
     QLabel,
     QDialog,
@@ -21,11 +19,6 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QMenu,
     QAction,
-    QListView,
-    QListWidget,
-    QListWidgetItem,
-    QSplitter,
-    QFrame,
     QTreeView,
 )
 from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex
