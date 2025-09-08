@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QRadioButton,
     QButtonGroup,
+    QSizePolicy,
 )
 from PyQt5.QtWidgets import QScrollArea
 import subprocess
@@ -779,6 +780,8 @@ class LogVerboseMaskApp(QMainWindow):
         device_label = QLabel("选择设备:")
         device_label.setToolTip("选择设备需要执行的设备")
         self.device_combo = QComboBox()
+        self.device_combo.setMinimumWidth(150)  # 设置最小宽度
+        self.device_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)  # 设置大小策略
         refresh_button = QPushButton("刷新")
         refresh_button.setToolTip("刷新设备列表")
         refresh_button.clicked.connect(self.refresh_devices)
