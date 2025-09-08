@@ -2983,6 +2983,8 @@ class FileDownloadDialog(QDialog):
             progress_layout = QHBoxLayout(progress_container)
             progress_layout.setContentsMargins(0, 0, 0, 0)
             progress_layout.setSpacing(5)
+            # 让容器在水平方向尽量填满
+            progress_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
             # 创建标签，显示自定义名称
             label = QLabel(f"{device_display_name} - {custom_name}")
@@ -2997,17 +2999,20 @@ class FileDownloadDialog(QDialog):
             progress_bar.setValue(0)
             progress_bar.setFormat("")  # 不显示内置百分比
             progress_bar.setMinimumWidth(100)
+            progress_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             
             # 创建百分比标签
             percentage_label = QLabel("0%")
             percentage_label.setStyleSheet("color: #2c3e50; font-weight: bold; min-width: 40px;")
             percentage_label.setAlignment(Qt.AlignCenter)
             
-            # 添加到布局
+            # 添加到布局（设置伸展因子，使进度条占据剩余空间）
             progress_layout.addWidget(label)
             progress_layout.addWidget(progress_bar)
             progress_layout.addWidget(percentage_label)
-            progress_layout.addStretch()
+            progress_layout.setStretch(0, 0)  # label
+            progress_layout.setStretch(1, 1)  # progress bar
+            progress_layout.setStretch(2, 0)  # percent label
             
             # 添加到网格布局（两列）
             row = idx // 2
