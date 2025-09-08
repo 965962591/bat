@@ -1,5 +1,6 @@
 import sys
 import os
+import tempfile
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -27,9 +28,45 @@ from PyQt5.QtWidgets import (
     QFrame,
     QTreeView,
 )
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir
+from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex
 from PyQt5.QtGui import QKeySequence, QIcon
 from PyQt5.QtWidgets import QShortcut, QFileSystemModel
+from PyQt5.QtCore import QSortFilterProxyModel
+
+
+class ExcludeFilterProxyModel(QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.excluded_paths = set()
+        self.hide_all = False
+
+    def set_excluded(self, paths):
+        self.excluded_paths = set(paths or [])
+        self.invalidateFilter()
+
+    def clear_excluded(self):
+        self.excluded_paths.clear()
+        self.invalidateFilter()
+
+    def set_hide_all(self, flag: bool):
+        self.hide_all = bool(flag)
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row, source_parent):
+        if self.hide_all:
+            return False
+        source_index = self.sourceModel().index(source_row, 0, source_parent)
+        if not source_index.isValid():
+            return True
+        model = self.sourceModel()
+        try:
+            file_path = model.filePath(source_index)
+        except Exception:
+            return True
+        for p in self.excluded_paths:
+            if file_path == p or file_path.startswith(p + os.sep):
+                return False
+        return True
 
 
 
@@ -125,7 +162,20 @@ class FileOrganizer(QWidget):
         self.right_model = QFileSystemModel()
         self.right_model.setRootPath("")
         self.right_model.setFilter(QDir.Dirs | QDir.Files | QDir.NoDotAndDotDot)
-        self.right_tree.setModel(self.right_model)
+        # 右侧使用过滤代理模型，以支持移除选中（隐藏选中项）
+        self.right_proxy = ExcludeFilterProxyModel(self)
+        self.right_proxy.setSourceModel(self.right_model)
+        self.right_tree.setModel(self.right_proxy)
+        # 用于显示空视图的临时目录
+        self._empty_dir = None
+        # 启动时设置为空目录，避免显示盘符
+        try:
+            import tempfile as _tmp
+            self._empty_dir = _tmp.mkdtemp(prefix="rename_empty_")
+            empty_index = self.right_proxy.mapFromSource(self.right_model.index(self._empty_dir))
+            self.right_tree.setRootIndex(empty_index)
+        except Exception:
+            self.right_tree.setRootIndex(QModelIndex())
         self.right_tree.setSelectionMode(QTreeView.ExtendedSelection)
         self.right_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.right_tree.customContextMenuRequested.connect(self.open_context_menu_right)
@@ -305,58 +355,119 @@ class FileOrganizer(QWidget):
 
 
     def add_to_right(self):
-        selected_indexes = self.left_tree.selectedIndexes()
-        for index in selected_indexes:
-            if index.column() == 0:  # 只处理第一列的选择
-                file_path = self.left_model.filePath(index)
-                if os.path.isdir(file_path):
-                    # 如果是文件夹，设置右侧模型的根路径为该文件夹
-                    self.right_tree.setRootIndex(self.right_model.index(file_path))
-                elif os.path.isfile(file_path):
-                    # 如果是文件，设置右侧模型的根路径为该文件所在的文件夹
-                    folder_path = os.path.dirname(file_path)
-                    self.right_tree.setRootIndex(self.right_model.index(folder_path))
-        self.update_file_count()
+        """将左侧当前选中内容加入右侧。
+        规则：
+        - 若选中多个条目：
+          - 若包含文件，右侧根设为这些文件的共同父目录；
+          - 若全是文件夹，若只有一个则设为该文件夹；多个则设为这些文件夹的共同父目录；
+        - 若仅选中一个文件夹，则右侧根=该文件夹。
+        """
+        selected = [idx for idx in self.left_tree.selectedIndexes() if idx.column() == 0]
+        if not selected:
+            return
+        # 转为真实路径
+        paths = [self.left_model.filePath(idx) for idx in selected]
+        # 如果有文件，使用其父目录
+        normalized_dirs = []
+        for p in paths:
+            if os.path.isfile(p):
+                normalized_dirs.append(os.path.dirname(p))
+            else:
+                normalized_dirs.append(p)
+        # 计算共同父目录
+        def common_parent(dir_list):
+            parts = [os.path.abspath(d).split(os.sep) for d in dir_list if os.path.isdir(d)]
+            if not parts:
+                return None
+            min_len = min(len(x) for x in parts)
+            prefix = []
+            for i in range(min_len):
+                token = parts[0][i]
+                if all(x[i] == token for x in parts):
+                    prefix.append(token)
+                else:
+                    break
+            return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
+        target_dir = None
+        unique_dirs = list(dict.fromkeys(normalized_dirs))
+        if len(unique_dirs) == 1:
+            target_dir = unique_dirs[0]
+        else:
+            target_dir = common_parent(unique_dirs)
+        if target_dir and os.path.isdir(target_dir):
+            self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(target_dir)))
+            # 移除集合需清空，避免之前过滤影响新的显示
+            self._right_excluded_paths = []
+            self.right_proxy.clear_excluded()
+            self.right_proxy.set_hide_all(False)
+            # 取消空目录根
+            self._empty_dir = None
+            self.update_file_count()
 
     def add_all_to_right(self):
         root_path = self.folder_input.text()
         if os.path.isdir(root_path):
             # 设置右侧模型的根路径为当前选择的文件夹
-            self.right_tree.setRootIndex(self.right_model.index(root_path))
+            self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(root_path)))
         self.update_file_count()
 
     def remove_from_right(self):
-        # 对于文件模型，我们无法直接删除项目，所以清空右侧视图
-        self.right_tree.setRootIndex(self.right_model.index(""))
+        # 只移除右侧选中的条目（通过过滤器隐藏选中的路径）
+        selected_indexes = self.right_tree.selectionModel().selectedIndexes()
+        if not selected_indexes:
+            return
+        # 收集选中项对应的源模型路径
+        excluded = list(getattr(self, "_right_excluded_paths", []))
+        for proxy_index in selected_indexes:
+            if proxy_index.column() != 0:
+                continue
+            source_index = self.right_proxy.mapToSource(proxy_index)
+            if not source_index.isValid():
+                continue
+            file_path = self.right_model.filePath(source_index)
+            if file_path:
+                excluded.append(file_path)
+        # 去重并设置过滤
+        self._right_excluded_paths = list(dict.fromkeys(excluded))
+        self.right_proxy.set_excluded(self._right_excluded_paths)
+        # 同步更新计数
         self.update_file_count()
 
     def remove_all_from_right(self):
-        # 清空右侧视图
-        self.right_tree.setRootIndex(self.right_model.index(""))
+        # 清空右侧视图（重置过滤并置空根索引）
+        self._right_excluded_paths = []
+        if hasattr(self, 'right_proxy'):
+            self.right_proxy.clear_excluded()
+            # 直接隐藏全部内容，避免显示驱动器列表
+            self.right_proxy.set_hide_all(False)
+        # 将右侧根设置为一个临时空目录，确保界面为空
+        try:
+            if not self._empty_dir or not os.path.exists(self._empty_dir):
+                self._empty_dir = tempfile.mkdtemp(prefix="rename_empty_")
+            empty_index = self.right_proxy.mapFromSource(self.right_model.index(self._empty_dir))
+            self.right_tree.setRootIndex(empty_index)
+        except Exception:
+            # 兜底：设置无效索引
+            self.right_tree.setRootIndex(QModelIndex())
         self.update_file_count()
 
     def update_file_count(self):
+        """统计右侧当前可见（未被过滤）的文件数量"""
         file_count = 0
-        root_index = self.right_tree.rootIndex()
-        if root_index.isValid():
-            # 计算右侧视图中的文件数量
-            for i in range(self.right_model.rowCount(root_index)):
-                child_index = self.right_model.index(i, 0, root_index)
-                if self.right_model.isDir(child_index):
-                    # 如果是文件夹，递归计算其中的文件数量
-                    file_count += self.count_files_in_directory(child_index)
-                else:
-                    # 如果是文件，直接计数
-                    file_count += 1
+        root_proxy_index = self.right_tree.rootIndex()
+        if root_proxy_index.isValid():
+            file_count = self.count_visible_files(root_proxy_index)
         self.file_count_label.setText(f"文件总数: {file_count}")
-    
-    def count_files_in_directory(self, dir_index):
-        """递归计算目录中的文件数量"""
+
+    def count_visible_files(self, dir_proxy_index):
+        """递归统计代理模型下可见文件数量（包含子目录）。"""
         count = 0
-        for i in range(self.right_model.rowCount(dir_index)):
-            child_index = self.right_model.index(i, 0, dir_index)
-            if self.right_model.isDir(child_index):
-                count += self.count_files_in_directory(child_index)
+        rows = self.right_proxy.rowCount(dir_proxy_index)
+        for i in range(rows):
+            child_proxy = self.right_proxy.index(i, 0, dir_proxy_index)
+            source_idx = self.right_proxy.mapToSource(child_proxy)
+            if self.right_model.isDir(source_idx):
+                count += self.count_visible_files(child_proxy)
             else:
                 count += 1
         return count
@@ -429,8 +540,51 @@ class FileOrganizer(QWidget):
         hash_count = prefix.count("#")
         try:
             root_index = self.right_tree.rootIndex()
-            if root_index.isValid():
-                self.rename_files_recursive(root_index, prefix, replace_text, hash_count)
+            if not root_index.isValid():
+                QMessageBox.information(self, "提示", "右侧没有可重命名的文件")
+                return
+            # 构建可见文件列表（通过代理模型遍历）
+            visible_files = []
+            def collect_files(proxy_index):
+                rows = self.right_proxy.rowCount(proxy_index)
+                for i in range(rows):
+                    child_proxy = self.right_proxy.index(i, 0, proxy_index)
+                    source_idx = self.right_proxy.mapToSource(child_proxy)
+                    if self.right_model.isDir(source_idx):
+                        collect_files(child_proxy)
+                    else:
+                        visible_files.append(self.right_model.filePath(source_idx))
+            collect_files(root_index)
+            if not visible_files:
+                QMessageBox.information(self, "提示", "右侧没有可重命名的文件")
+                return
+            # 用可见文件列表进行重命名
+            # 将右侧根作为范围，但实际操作基于visible_files路径
+            # 逐个文件应用新名称
+            # 将可见文件按照其父目录分组，组内从0开始编号
+            from collections import defaultdict
+            folder_to_files = defaultdict(list)
+            for fp in visible_files:
+                folder_to_files[os.path.dirname(fp)].append(fp)
+            for folder_path, files in folder_to_files.items():
+                files.sort()
+                index_counter = 0
+                for file_path in files:
+                    original_name = os.path.basename(file_path)
+                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+                    if self.should_rename_file(original_name):
+                        new_name = self.generate_new_name(
+                            original_name,
+                            prefix,
+                            replace_text,
+                            parent_folder_name,
+                            os.path.basename(folder_path),
+                            index_counter,
+                            hash_count,
+                        )
+                        index_counter += 1
+                        new_path = os.path.join(folder_path, new_name)
+                        self.perform_rename(file_path, new_path)
 
             # 重命名完成信息提示框
             QMessageBox.information(self, "提示", "重命名完成")
@@ -510,7 +664,44 @@ class FileOrganizer(QWidget):
 
         root_index = self.right_tree.rootIndex()
         if root_index.isValid():
-            self.preview_rename_recursive(root_index, prefix, replace_text, hash_count, rename_data)
+            # 基于可见文件生成预览
+            def collect_preview(proxy_index):
+                from collections import defaultdict
+                folder_to_files = defaultdict(list)
+                rows = self.right_proxy.rowCount(proxy_index)
+                for i in range(rows):
+                    child_proxy = self.right_proxy.index(i, 0, proxy_index)
+                    source_idx = self.right_proxy.mapToSource(child_proxy)
+                    if self.right_model.isDir(source_idx):
+                        # 合并子目录结果
+                        sub_map = collect_preview(child_proxy)
+                        for k, v in sub_map.items():
+                            folder_to_files[k].extend(v)
+                    else:
+                        file_path = self.right_model.filePath(source_idx)
+                        folder_path = os.path.dirname(file_path)
+                        folder_to_files[folder_path].append(file_path)
+                return folder_to_files
+
+            folder_to_files = collect_preview(root_index)
+            for folder_path, files in folder_to_files.items():
+                files.sort()
+                local_idx = 0
+                for file_path in files:
+                    original_name = os.path.basename(file_path)
+                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+                    if self.should_rename_file(original_name):
+                        new_name = self.generate_new_name(
+                            original_name,
+                            prefix,
+                            replace_text,
+                            parent_folder_name,
+                            os.path.basename(folder_path),
+                            local_idx,
+                            hash_count,
+                        )
+                        rename_data.append((folder_path, original_name, new_name))
+                        local_idx += 1
 
         if rename_data:
             dialog = PreviewDialog(rename_data)
@@ -613,6 +804,7 @@ class FileOrganizer(QWidget):
             # 不再限制根路径，显示完整的文件系统结构
             # 自动展开到指定路径
             self.expand_to_path(folder_path)
+            # 不自动更新右侧，由“增加/增加全部”按钮控制
             
             # 计算指定文件夹内的文件夹数量
             folder_count = 0
@@ -636,10 +828,15 @@ class FileOrganizer(QWidget):
             index = indexes[0]
             file_path = self.left_model.filePath(index)
             if os.path.isdir(file_path):
-                # 更新文件夹输入框
+                # 更新文件夹输入框，仅更新统计，不自动添加到右侧
                 self.folder_input.setText(file_path)
-                # 更新文件夹数量统计
                 self.update_folder_count_for_path(file_path)
+            else:
+                # 如果选择的是文件，仅更新输入框为其父目录
+                parent_dir = os.path.dirname(file_path)
+                if os.path.isdir(parent_dir):
+                    self.folder_input.setText(parent_dir)
+                    self.update_folder_count_for_path(parent_dir)
 
     def update_folder_count_for_path(self, folder_path):
         """更新指定路径的文件夹数量统计"""
