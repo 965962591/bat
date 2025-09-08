@@ -119,8 +119,8 @@ class LogVerboseMaskApp(QMainWindow):
         self.tab_checkboxes = {}  # 存储每个标签页的复选框 {tab_name: [checkboxes]}
         self.tab_script_checkboxes = {}  # 存储高通脚本复选框 {tab_name: [checkboxes]}
         
-        # 初始化scrcpy进程变量
-        self.scrcpy_process = None
+        # 初始化scrcpy进程变量 - 支持多设备同时投屏
+        self.scrcpy_processes = {}  # 存储每个设备的投屏进程 {device_id: process}
         
         self.initUI()
         self.setup_logging()
@@ -1810,20 +1810,48 @@ class LogVerboseMaskApp(QMainWindow):
         self.download_dialog.show()
 
     def open_adb_interface(self):
-        """调用 adb.py 中的接口"""
+        """调用 adb.py 中的接口 - 支持多设备同时投屏"""
         try:
-            # 检查 adb 是否已启动
-            if self.scrcpy_process is None or self.scrcpy_process.poll() is not None:
-                scrcpy_path = os.path.join(os.path.dirname(__file__), "scrcpy", "scrcpy.exe")
-                if not os.path.exists(scrcpy_path):
-                    print(f"错误: 找不到 scrcpy.exe 路径: {scrcpy_path}")
-                    return
-                self.scrcpy_process = subprocess.Popen(
-                    [scrcpy_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                print("已启动 adb 投屏")
-            else:
-                print("adb 投屏已在运行中。")
+            # 获取选中的设备
+            selected_device = self.get_selected_device()
+            if not selected_device:
+                QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+                return
+            
+            scrcpy_path = os.path.join(os.path.dirname(__file__), "scrcpy", "scrcpy.exe")
+            if not os.path.exists(scrcpy_path):
+                print(f"错误: 找不到 scrcpy.exe 路径: {scrcpy_path}")
+                return
+            
+            # 检查当前设备是否已有投屏进程在运行
+            if (selected_device in self.scrcpy_processes and 
+                self.scrcpy_processes[selected_device] is not None and 
+                self.scrcpy_processes[selected_device].poll() is None):
+                print(f"设备 {selected_device} 的投屏已在运行中。")
+                return
+            
+            # 构建scrcpy命令参数
+            scrcpy_args = [
+                scrcpy_path,
+                "-s", selected_device
+            ]
+            
+            # 启动新设备的投屏进程
+            process = subprocess.Popen(
+                scrcpy_args, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE
+            )
+            
+            # 记录该设备的投屏进程
+            self.scrcpy_processes[selected_device] = process
+            print(f"已启动 adb 投屏 - 设备: {selected_device}")
+            
+            # 显示当前运行的投屏设备数量
+            running_count = sum(1 for p in self.scrcpy_processes.values() 
+                              if p is not None and p.poll() is None)
+            print(f"当前共有 {running_count} 个设备正在投屏")
+            
         except Exception as e:
             print(f"启动 adb 投屏失败: {str(e)}")
 
@@ -1836,6 +1864,18 @@ class LogVerboseMaskApp(QMainWindow):
         # 停止定时器
         if hasattr(self, 'refresh_timer'):
             self.refresh_timer.stop()
+        
+        # 停止所有投屏进程
+        if hasattr(self, 'scrcpy_processes'):
+            for device_id, process in self.scrcpy_processes.items():
+                if process is not None and process.poll() is None:
+                    print(f"正在停止设备 {device_id} 的投屏...")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+        
         event.accept()
 
 
