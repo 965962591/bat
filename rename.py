@@ -20,10 +20,16 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QMenu,
     QAction,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
+    QSplitter,
+    QFrame,
+    QTreeView,
 )
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal
+from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir
 from PyQt5.QtGui import QKeySequence, QIcon
-from PyQt5.QtWidgets import QShortcut
+from PyQt5.QtWidgets import QShortcut, QFileSystemModel
 
 
 
@@ -83,30 +89,59 @@ class FileOrganizer(QWidget):
         # 左侧布局
         left_layout = QVBoxLayout()
         self.folder_count_label = QLabel("文件夹数量: 0", self)
-        self.left_list = QTreeWidget(self)
-        self.left_list.setHeaderHidden(True)
-        self.left_list.setSelectionMode(
-            QTreeWidget.ExtendedSelection
-        )  # 支持按住Ctrl或Shift进行多选
-        self.left_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.left_list.customContextMenuRequested.connect(self.open_context_menu)
+        
+        # 使用QTreeView和QFileSystemModel实现文件预览
+        self.left_tree = QTreeView(self)
+        self.left_model = QFileSystemModel()
+        self.left_model.setRootPath("")
+        self.left_model.setFilter(QDir.Dirs | QDir.Files | QDir.NoDotAndDotDot)
+        self.left_tree.setModel(self.left_model)
+        self.left_tree.setSelectionMode(QTreeView.ExtendedSelection)
+        self.left_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.left_tree.customContextMenuRequested.connect(self.open_context_menu)
+        self.left_tree.setAlternatingRowColors(True)
+        self.left_tree.setRootIsDecorated(True)
+        
+        # 只显示名称列，隐藏其他列
+        self.left_tree.hideColumn(1)  # 大小
+        self.left_tree.hideColumn(2)  # 类型
+        self.left_tree.hideColumn(3)  # 修改日期
+        
+        # 隐藏列标题
+        self.left_tree.header().hide()
+        
+        # 连接选择变化信号
+        self.left_tree.selectionModel().selectionChanged.connect(self.on_left_tree_selection_changed)
+        
         left_layout.addWidget(self.folder_count_label)
-        left_layout.addWidget(self.left_list)
+        left_layout.addWidget(self.left_tree)
 
         # 右侧布局
         right_layout = QVBoxLayout()
         self.file_count_label = QLabel("文件总数: 0", self)
-        self.right_list = QTreeWidget(self)
-        self.right_list.setSelectionMode(
-            QTreeWidget.ExtendedSelection
-        )  # 支持按住Ctrl或Shift进行多选
-        self.right_list.setHeaderHidden(True)
-        self.right_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.right_list.customContextMenuRequested.connect(self.open_context_menu_right)
-        right_layout.addWidget(
-            self.file_count_label
-        )  # 将文件总数标签放在右侧布局的顶部
-        right_layout.addWidget(self.right_list)
+        
+        # 右侧使用QTreeView和QFileSystemModel来显示选中的文件
+        self.right_tree = QTreeView(self)
+        self.right_model = QFileSystemModel()
+        self.right_model.setRootPath("")
+        self.right_model.setFilter(QDir.Dirs | QDir.Files | QDir.NoDotAndDotDot)
+        self.right_tree.setModel(self.right_model)
+        self.right_tree.setSelectionMode(QTreeView.ExtendedSelection)
+        self.right_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.right_tree.customContextMenuRequested.connect(self.open_context_menu_right)
+        self.right_tree.setAlternatingRowColors(True)
+        self.right_tree.setRootIsDecorated(True)
+        
+        # 只显示名称列，隐藏其他列
+        self.right_tree.hideColumn(1)  # 大小
+        self.right_tree.hideColumn(2)  # 类型
+        self.right_tree.hideColumn(3)  # 修改日期
+        
+        # 隐藏列标题
+        self.right_tree.header().hide()
+        
+        right_layout.addWidget(self.file_count_label)
+        right_layout.addWidget(self.right_tree)
 
         # 右侧下方布局
         right_bottom_layout = QHBoxLayout()
@@ -204,7 +239,7 @@ class FileOrganizer(QWidget):
         # 加载上次打开的文件夹
         if last_folder := self.settings.value("lastFolder", ""):
             self.folder_input.setText(last_folder)
-            self.populate_left_list(last_folder)
+            self.set_folder_path(last_folder)
 
         self.folder_input.returnPressed.connect(self.on_folder_input_enter)
 
@@ -222,30 +257,24 @@ class FileOrganizer(QWidget):
             if isinstance(folder, str):
                 if os.path.isdir(folder):
                     self.folder_input.setText(folder)
-                    self.populate_left_list(folder)
+                    self.set_folder_path(folder)
                     self.settings.setValue("lastFolder", folder)
                 else:
                     # 信息提示框
                     QMessageBox.information(self, "提示", "传入的路径不是有效的文件夹")
             elif isinstance(folder, list):
-                self.left_list.clear()
-                self.right_list.clear()
                 # 选择列表中的首个文件的上上级文件夹添加到左侧列表
                 folder_list = os.path.dirname(os.path.dirname(folder[0]))
                 if os.path.isdir(folder_list):
                     self.folder_input.setText(folder_list)
-                    self.populate_left_list(folder_list)
+                    self.set_folder_path(folder_list)
                 else:
                     # 信息提示框
                     QMessageBox.information(self, "提示", "传入的路径不是有效的文件夹")
                 # 将列表中的文件添加到右侧列表
                 for file in folder:
                     if os.path.isfile(file):
-                        file_name = os.path.basename(file)
-                        file_item = QTreeWidgetItem(self.right_list, [file_name])
-                        file_item.setData(
-                            0, Qt.UserRole, file
-                        )  # 将文件的完整路径存储在QTreeWidgetItem中
+                        self.add_file_to_right_tree(file)
                     else:
                         # 信息提示框
                         QMessageBox.information(self, "提示", "传入的文件路径不存在！")
@@ -257,103 +286,135 @@ class FileOrganizer(QWidget):
                     self, "提示", "传入的路径不是有效的文件夹字符串或文件完整路径列表"
                 )
 
-    def populate_left_list(self, folder):
-        if not os.path.exists(folder):
-            print(f"路径不存在: {folder}")
-            # 这里可以选择设置一个默认路径或提示用户
-            return
 
-        self.left_list.clear()
-        self.right_list.clear()
-        folder_count = 0
-        for subfolder in os.listdir(folder):
-            subfolder_path = os.path.join(folder, subfolder)
-            if os.path.isdir(subfolder_path):
-                folder_item = QTreeWidgetItem(self.left_list, [subfolder])
-                has_files = False  # 用于检查文件夹内是否有文件
-                for file in os.listdir(subfolder_path):
-                    file_path = os.path.join(subfolder_path, file)
-                    if os.path.isfile(file_path):
-                        file_item = QTreeWidgetItem(folder_item, [file])
-                        file_item.setData(
-                            0, Qt.UserRole, file_path
-                        )  # 将文件的完整路径存储在QTreeWidgetItem中
-                        has_files = True
-                if has_files:
-                    folder_count += 1
-            else:
-                # 如果是文件而不是文件夹，直接添加到左侧列表
-                file_item = QTreeWidgetItem(self.left_list, [subfolder])
-                file_item.setData(
-                    0, Qt.UserRole, subfolder_path
-                )  # 将文件的完整路径存储在QTreeWidgetItem中
-                folder_count += 1
+    def format_file_size(self, size_bytes):
+        """格式化文件大小"""
+        if size_bytes == 0:
+            return "0 B"
+        size_names = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        while size_bytes >= 1024 and i < len(size_names) - 1:
+            size_bytes /= 1024.0
+            i += 1
+        return f"{size_bytes:.1f} {size_names[i]}"
 
-        self.folder_count_label.setText(f"文件夹数量: {folder_count}")
-        self.update_file_count()
+    def format_time(self, timestamp):
+        """格式化时间戳"""
+        import time
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+
 
     def add_to_right(self):
-        selected_items = self.left_list.selectedItems()
-        for item in selected_items:
-            # 检查是否为文件夹
-            if item.childCount() > 0:
-                # 如果选中的是文件夹，添加文件夹及其所有文件
-                folder_name = item.text(0)
-                folder_path = os.path.join(self.folder_input.text(), folder_name)
-                folder_item = QTreeWidgetItem(self.right_list, [folder_name])
-                folder_item.setData(0, Qt.UserRole, folder_path)  # 设置文件夹的完整路径
-                for i in range(item.childCount()):
-                    child = item.child(i)
-                    file_name = child.text(0)
-                    file_path = child.data(0, Qt.UserRole)
-                    file_item = QTreeWidgetItem(folder_item, [file_name])
-                    file_item.setData(0, Qt.UserRole, file_path)  # 设置文件的完整路径
-            else:
-                # 如果是文件，直接添加到右侧列表
-                file_path = item.data(0, Qt.UserRole)
-                if file_path:  # 确保 file_path 不为 None
-                    file_name = os.path.basename(file_path)
-                    file_item = QTreeWidgetItem(self.right_list, [file_name])
-                    file_item.setData(0, Qt.UserRole, file_path)  # 设置文件的完整路径
+        selected_indexes = self.left_tree.selectedIndexes()
+        for index in selected_indexes:
+            if index.column() == 0:  # 只处理第一列的选择
+                file_path = self.left_model.filePath(index)
+                if os.path.isdir(file_path):
+                    # 如果是文件夹，设置右侧模型的根路径为该文件夹
+                    self.right_tree.setRootIndex(self.right_model.index(file_path))
+                elif os.path.isfile(file_path):
+                    # 如果是文件，设置右侧模型的根路径为该文件所在的文件夹
+                    folder_path = os.path.dirname(file_path)
+                    self.right_tree.setRootIndex(self.right_model.index(folder_path))
         self.update_file_count()
 
     def add_all_to_right(self):
-        self.right_list.clear()
-        for i in range(self.left_list.topLevelItemCount()):
-            item = self.left_list.topLevelItem(i)
-            folder_name = item.text(0)
-            folder_path = os.path.join(self.folder_input.text(), folder_name)
-            folder_item = QTreeWidgetItem(self.right_list, [folder_name])
-            folder_item.setData(0, Qt.UserRole, folder_path)  # 设置文件夹的完整路径
-            for j in range(item.childCount()):
-                child = item.child(j)
-                file_name = child.text(0)
-                file_path = child.data(0, Qt.UserRole)
-                file_item = QTreeWidgetItem(folder_item, [file_name])
-                file_item.setData(0, Qt.UserRole, file_path)  # 设置文件的完整路径
+        root_path = self.folder_input.text()
+        if os.path.isdir(root_path):
+            # 设置右侧模型的根路径为当前选择的文件夹
+            self.right_tree.setRootIndex(self.right_model.index(root_path))
         self.update_file_count()
 
     def remove_from_right(self):
-        selected_items = self.right_list.selectedItems()
-        for item in selected_items:
-            index = self.right_list.indexOfTopLevelItem(item)
-            self.right_list.takeTopLevelItem(index)
+        # 对于文件模型，我们无法直接删除项目，所以清空右侧视图
+        self.right_tree.setRootIndex(self.right_model.index(""))
         self.update_file_count()
 
     def remove_all_from_right(self):
-        self.right_list.clear()
+        # 清空右侧视图
+        self.right_tree.setRootIndex(self.right_model.index(""))
         self.update_file_count()
 
     def update_file_count(self):
         file_count = 0
-        for i in range(self.right_list.topLevelItemCount()):
-            item = self.right_list.topLevelItem(i)
-            if item.childCount() > 0:
-                file_count += item.childCount()
-            else:
-                # 如果是单个文件，直接计数
-                file_count += 1
+        root_index = self.right_tree.rootIndex()
+        if root_index.isValid():
+            # 计算右侧视图中的文件数量
+            for i in range(self.right_model.rowCount(root_index)):
+                child_index = self.right_model.index(i, 0, root_index)
+                if self.right_model.isDir(child_index):
+                    # 如果是文件夹，递归计算其中的文件数量
+                    file_count += self.count_files_in_directory(child_index)
+                else:
+                    # 如果是文件，直接计数
+                    file_count += 1
         self.file_count_label.setText(f"文件总数: {file_count}")
+    
+    def count_files_in_directory(self, dir_index):
+        """递归计算目录中的文件数量"""
+        count = 0
+        for i in range(self.right_model.rowCount(dir_index)):
+            child_index = self.right_model.index(i, 0, dir_index)
+            if self.right_model.isDir(child_index):
+                count += self.count_files_in_directory(child_index)
+            else:
+                count += 1
+        return count
+
+    def rename_files_recursive(self, parent_index, prefix, replace_text, hash_count):
+        """递归重命名文件"""
+        for i in range(self.right_model.rowCount(parent_index)):
+            child_index = self.right_model.index(i, 0, parent_index)
+            file_path = self.right_model.filePath(child_index)
+            
+            if self.right_model.isDir(child_index):
+                # 如果是文件夹，递归处理
+                self.rename_files_recursive(child_index, prefix, replace_text, hash_count)
+            else:
+                # 如果是文件，进行重命名
+                original_name = os.path.basename(file_path)
+                folder_path = os.path.dirname(file_path)
+                parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+                
+                if self.should_rename_file(original_name):
+                    new_name = self.generate_new_name(
+                        original_name,
+                        prefix,
+                        replace_text,
+                        parent_folder_name,
+                        os.path.basename(folder_path),
+                        i,
+                        hash_count,
+                    )
+                    new_path = os.path.join(folder_path, new_name)
+                    self.perform_rename(file_path, new_path)
+
+    def preview_rename_recursive(self, parent_index, prefix, replace_text, hash_count, rename_data):
+        """递归预览重命名"""
+        for i in range(self.right_model.rowCount(parent_index)):
+            child_index = self.right_model.index(i, 0, parent_index)
+            file_path = self.right_model.filePath(child_index)
+            
+            if self.right_model.isDir(child_index):
+                # 如果是文件夹，递归处理
+                self.preview_rename_recursive(child_index, prefix, replace_text, hash_count, rename_data)
+            else:
+                # 如果是文件，添加到预览数据
+                original_name = os.path.basename(file_path)
+                folder_path = os.path.dirname(file_path)
+                parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+                
+                if self.should_rename_file(original_name):
+                    new_name = self.generate_new_name(
+                        original_name,
+                        prefix,
+                        replace_text,
+                        parent_folder_name,
+                        os.path.basename(folder_path),
+                        i,
+                        hash_count,
+                    )
+                    rename_data.append((folder_path, original_name, new_name))
 
     def toggle_replace(self, state):
         self.replace_line_edit.setVisible(state == Qt.Checked)
@@ -367,50 +428,9 @@ class FileOrganizer(QWidget):
         )
         hash_count = prefix.count("#")
         try:
-            for i in range(self.right_list.topLevelItemCount()):
-                item = self.right_list.topLevelItem(i)
-                if item.childCount() > 0:
-                    # 处理文件夹
-                    folder_name = item.text(0)
-                    folder_path = os.path.join(self.folder_input.text(), folder_name)
-                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
-
-                    for j in range(item.childCount()):
-                        file_item = item.child(j)
-                        original_name = file_item.text(0)
-                        original_path = os.path.join(folder_path, original_name)
-                        if self.should_rename_file(original_name):
-                            new_name = self.generate_new_name(
-                                original_name,
-                                prefix,
-                                replace_text,
-                                parent_folder_name,
-                                folder_name,
-                                j,
-                                hash_count,
-                            )
-                            new_path = os.path.join(folder_path, new_name)
-                            self.perform_rename(original_path, new_path)
-                else:
-                    # 处理单个文件
-                    original_name = os.path.basename(item.data(0, Qt.UserRole))
-                    folder_path = os.path.dirname(
-                        item.data(0, Qt.UserRole)
-                    )  # item.data(0, Qt.UserRole)获取文件完整路径
-                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
-                    original_path = item.data(0, Qt.UserRole)
-                    if self.should_rename_file(original_name):
-                        new_name = self.generate_new_name(
-                            original_name,
-                            prefix,
-                            replace_text,
-                            parent_folder_name,
-                            os.path.basename(folder_path),
-                            i,
-                            hash_count,
-                        )
-                        new_path = os.path.join(folder_path, new_name)
-                        self.perform_rename(original_path, new_path)
+            root_index = self.right_tree.rootIndex()
+            if root_index.isValid():
+                self.rename_files_recursive(root_index, prefix, replace_text, hash_count)
 
             # 重命名完成信息提示框
             QMessageBox.information(self, "提示", "重命名完成")
@@ -475,7 +495,7 @@ class FileOrganizer(QWidget):
     def refresh_file_lists(self):
         # 重新填充左侧列表
         if current_folder := self.folder_input.text():
-            self.populate_left_list(current_folder)
+            self.set_folder_path(current_folder)
 
     def preview_rename(self):
         rename_data = []
@@ -488,51 +508,9 @@ class FileOrganizer(QWidget):
 
         hash_count = prefix.count("#")
 
-        for i in range(self.right_list.topLevelItemCount()):
-            item = self.right_list.topLevelItem(i)
-            if item.childCount() > 0:
-                folder_name = item.text(0)
-                folder_path = os.path.join(self.folder_input.text(), folder_name)
-                parent_folder_name = os.path.basename(os.path.dirname(folder_path))
-
-                for j in range(item.childCount()):
-                    file_item = item.child(j)
-                    original_path = file_item.data(0, Qt.UserRole)
-                    if original_path:
-                        original_name = os.path.basename(original_path)
-                        if self.should_rename_file(original_name):
-                            new_name = self.generate_new_name(
-                                original_name,
-                                prefix,
-                                replace_text,
-                                parent_folder_name,
-                                folder_name,
-                                j,
-                                hash_count,
-                            )
-                            rename_data.append((folder_path, original_name, new_name))
-                    else:
-                        print(f"警告: 文件项 '{file_item.text(0)}' 缺少完整路径数据。")
-            else:
-                # 处理单个文件
-                original_path = item.data(0, Qt.UserRole)
-                if original_path:
-                    original_name = os.path.basename(original_path)
-                    folder_path = os.path.dirname(original_path)
-                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
-                    if self.should_rename_file(original_name):
-                        new_name = self.generate_new_name(
-                            original_name,
-                            prefix,
-                            replace_text,
-                            parent_folder_name,
-                            os.path.basename(folder_path),
-                            i,
-                            hash_count,
-                        )
-                        rename_data.append((folder_path, original_name, new_name))
-                else:
-                    print(f"警告: 文件项 '{item.text(0)}' 缺少完整路径数据。")
+        root_index = self.right_tree.rootIndex()
+        if root_index.isValid():
+            self.preview_rename_recursive(root_index, prefix, replace_text, hash_count, rename_data)
 
         if rename_data:
             dialog = PreviewDialog(rename_data)
@@ -575,41 +553,116 @@ class FileOrganizer(QWidget):
         open_folder_action = QAction("在文件资源管理器中打开", self)
         open_folder_action.triggered.connect(self.open_folder_in_explorer)
         menu.addAction(open_folder_action)
-        menu.exec_(self.left_list.viewport().mapToGlobal(position))
+        menu.exec_(self.left_tree.viewport().mapToGlobal(position))
 
     def open_context_menu_right(self, position):
         menu = QMenu()
         open_folder_action = QAction("在文件资源管理器中打开", self)
         open_folder_action.triggered.connect(self.open_folder_in_explorer_right)
         menu.addAction(open_folder_action)
-        menu.exec_(self.right_list.viewport().mapToGlobal(position))
+        menu.exec_(self.right_tree.viewport().mapToGlobal(position))
 
     def open_folder_in_explorer(self):
-        if selected_items := self.left_list.selectedItems():
-            item = selected_items[0]
-            folder_name = item.text(0)
-            folder_path = os.path.join(self.folder_input.text(), folder_name)
-            if os.path.isdir(folder_path):
-                os.startfile(folder_path)
+        selected_indexes = self.left_tree.selectedIndexes()
+        if selected_indexes:
+            index = selected_indexes[0]
+            file_path = self.left_model.filePath(index)
+            if os.path.isdir(file_path):
+                os.startfile(file_path)
             else:
                 # 如果不是文件夹，打开文件所在的文件夹
-                os.startfile(os.path.dirname(folder_path))
+                os.startfile(os.path.dirname(file_path))
 
     def open_folder_in_explorer_right(self):
-        if selected_items := self.right_list.selectedItems():
-            item = selected_items[0]
-            folder_name = item.text(0)
-            folder_path = os.path.join(self.folder_input.text(), folder_name)
-            if os.path.isdir(folder_path):
-                os.startfile(folder_path)
+        selected_indexes = self.right_tree.selectedIndexes()
+        if selected_indexes:
+            index = selected_indexes[0]
+            file_path = self.right_model.filePath(index)
+            if os.path.isdir(file_path):
+                os.startfile(file_path)
             else:
                 # 如果不是文件夹，打开文件所在的文件夹
-                os.startfile(os.path.dirname(folder_path))
+                os.startfile(os.path.dirname(file_path))
+
+    def expand_to_path(self, folder_path):
+        """自动展开文件树到指定路径"""
+        if not os.path.isdir(folder_path):
+            return
+            
+        # 获取路径的索引
+        path_index = self.left_model.index(folder_path)
+        if not path_index.isValid():
+            return
+            
+        # 展开路径上的所有父级目录
+        current_path = folder_path
+        while current_path and current_path != os.path.dirname(current_path):
+            parent_index = self.left_model.index(current_path)
+            if parent_index.isValid():
+                self.left_tree.expand(parent_index)
+            current_path = os.path.dirname(current_path)
+            
+        # 滚动到目标路径
+        self.left_tree.scrollTo(path_index, QTreeView.PositionAtCenter)
+        # 选中目标路径
+        self.left_tree.setCurrentIndex(path_index)
+
+    def set_folder_path(self, folder_path):
+        """设置文件夹路径到文件模型"""
+        if os.path.isdir(folder_path):
+            # 不再限制根路径，显示完整的文件系统结构
+            # 自动展开到指定路径
+            self.expand_to_path(folder_path)
+            
+            # 计算指定文件夹内的文件夹数量
+            folder_count = 0
+            try:
+                for item in os.listdir(folder_path):
+                    item_path = os.path.join(folder_path, item)
+                    if os.path.isdir(item_path):
+                        folder_count += 1
+            except PermissionError:
+                folder_count = "无权限访问"
+            
+            # 显示当前选中文件夹的信息
+            folder_name = os.path.basename(folder_path) or folder_path
+            self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
+            self.update_file_count()
+
+    def on_left_tree_selection_changed(self, selected, deselected):
+        """处理左侧文件树选择变化"""
+        indexes = selected.indexes()
+        if indexes:
+            index = indexes[0]
+            file_path = self.left_model.filePath(index)
+            if os.path.isdir(file_path):
+                # 更新文件夹输入框
+                self.folder_input.setText(file_path)
+                # 更新文件夹数量统计
+                self.update_folder_count_for_path(file_path)
+
+    def update_folder_count_for_path(self, folder_path):
+        """更新指定路径的文件夹数量统计"""
+        if not os.path.isdir(folder_path):
+            return
+            
+        folder_count = 0
+        try:
+            for item in os.listdir(folder_path):
+                item_path = os.path.join(folder_path, item)
+                if os.path.isdir(item_path):
+                    folder_count += 1
+        except PermissionError:
+            folder_count = "无权限访问"
+        
+        # 显示当前选中文件夹的信息
+        folder_name = os.path.basename(folder_path) or folder_path
+        self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
 
     def on_folder_input_enter(self):
         folder = self.folder_input.text()
         if os.path.isdir(folder):
-            self.populate_left_list(folder)
+            self.set_folder_path(folder)
             self.settings.setValue("lastFolder", folder)
         else:
             print("输入的路径不是有效的文件夹")

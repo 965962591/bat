@@ -123,6 +123,12 @@ class LogVerboseMaskApp(QMainWindow):
         # 初始化scrcpy进程变量 - 支持多设备同时投屏
         self.scrcpy_processes = {}  # 存储每个设备的投屏进程 {device_id: process}
         
+        # 初始化重命名工具窗口变量
+        self.file_organizer = None
+        
+        # 初始化下载对话框变量
+        self.download_dialog = None
+        
         self.initUI()
         self.setup_logging()
         
@@ -1870,6 +1876,14 @@ class LogVerboseMaskApp(QMainWindow):
         if hasattr(self, 'refresh_timer'):
             self.refresh_timer.stop()
         
+        # 关闭重命名工具窗口
+        if hasattr(self, 'file_organizer') and self.file_organizer is not None:
+            self.file_organizer.close()
+        
+        # 关闭下载对话框
+        if hasattr(self, 'download_dialog') and self.download_dialog is not None:
+            self.download_dialog.close()
+        
         # 停止所有投屏进程
         if hasattr(self, 'scrcpy_processes'):
             for device_id, process in self.scrcpy_processes.items():
@@ -2025,6 +2039,9 @@ class FileDownloadDialog(QDialog):
         self.device_checkboxes = {}  # 设备ID到复选框的映射
         self.previously_selected_devices = set()  # 之前选中的设备
         self.previously_selected_folders = {}  # 之前选中的文件夹 {device_id: {folder_path: True}}
+        
+        # 初始化重命名工具窗口变量
+        self.file_organizer = None
         
         # 创建界面
         self.initUI()
@@ -3099,7 +3116,7 @@ class FileDownloadDialog(QDialog):
             self.file_organizer = FileOrganizer()
             # 设置文件夹路径
             self.file_organizer.folder_input.setText(target_path)
-            self.file_organizer.populate_left_list(target_path)
+            self.file_organizer.set_folder_path(target_path)
             self.file_organizer.show()
             print(f"已启动文件重命名工具，路径: {target_path}")
         except Exception as e:
@@ -3113,6 +3130,11 @@ class FileDownloadDialog(QDialog):
         if hasattr(self, 'download_thread') and self.download_thread.isRunning():
             self.download_thread.terminate()
             self.download_thread.wait()
+        
+        # 关闭重命名工具窗口
+        if hasattr(self, 'file_organizer') and self.file_organizer is not None:
+            self.file_organizer.close()
+        
         event.accept()
 
 
