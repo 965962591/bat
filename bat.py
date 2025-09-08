@@ -1839,6 +1839,7 @@ class LogVerboseMaskApp(QMainWindow):
             # 启动新设备的投屏进程
             process = subprocess.Popen(
                 scrcpy_args, 
+                creationflags=subprocess.CREATE_NO_WINDOW,
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE
             )
@@ -2159,8 +2160,15 @@ class FileDownloadDialog(QDialog):
             # 保存到INI文件
             self.save_device_names()
             
-            # 刷新设备显示
-            self.refresh_devices()
+            # 同步到主界面的设备名称映射
+            if hasattr(self.parent, 'device_name_mapping'):
+                self.parent.device_name_mapping.update(self.device_name_mapping)
+                # 刷新主界面的设备列表
+                if hasattr(self.parent, 'refresh_devices'):
+                    self.parent.refresh_devices()
+            
+            # 刷新下载界面的设备显示
+            self.update_device_checkboxes()
 
     def load_fixed_source_paths(self):
         """读取固定路径与配置文件。优先从 [source] 节读取。
@@ -2649,7 +2657,7 @@ class FileDownloadDialog(QDialog):
                     # 初始化设备文件夹复选框字典
                     self.device_folder_checkboxes[device] = {}
                     
-                    columns = 5  # 每行显示5个复选框
+                    columns = 9  # 每行显示9个复选框
                     for idx, (folder_path, custom_name) in enumerate(fixed_folders_dict.items()):
                         folder_checkbox = QCheckBox(custom_name)
                         # 设置鼠标悬浮提示，显示完整路径
