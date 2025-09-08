@@ -119,6 +119,9 @@ class LogVerboseMaskApp(QMainWindow):
         self.tab_checkboxes = {}  # 存储每个标签页的复选框 {tab_name: [checkboxes]}
         self.tab_script_checkboxes = {}  # 存储高通脚本复选框 {tab_name: [checkboxes]}
         
+        # 初始化scrcpy进程变量
+        self.scrcpy_process = None
+        
         self.initUI()
         self.setup_logging()
         
@@ -784,6 +787,14 @@ class LogVerboseMaskApp(QMainWindow):
         edit_device_button = QPushButton("编辑名称")
         edit_device_button.setToolTip("自定义设备名称")
         edit_device_button.clicked.connect(self.edit_current_device_name)
+
+
+
+
+        # 添加投屏按钮
+        adb_interface_button = QPushButton("投屏")
+        adb_interface_button.setToolTip("打开adb投屏窗口")
+        adb_interface_button.clicked.connect(self.open_adb_interface)
         
         # 快捷功能（拍照、截屏）已移至菜单栏
         # 批量拍摄控件：数量、间隔、拍摄、暂停/继续
@@ -810,6 +821,7 @@ class LogVerboseMaskApp(QMainWindow):
         device_layout.addWidget(self.device_combo)
         device_layout.addWidget(refresh_button)
         device_layout.addWidget(edit_device_button)
+        device_layout.addWidget(adb_interface_button)
         device_layout.addWidget(capture_count_label)
         device_layout.addWidget(self.capture_count_spin)
         device_layout.addWidget(capture_interval_label)
@@ -1797,6 +1809,24 @@ class LogVerboseMaskApp(QMainWindow):
         self.download_dialog = FileDownloadDialog(self)
         self.download_dialog.show()
 
+    def open_adb_interface(self):
+        """调用 adb.py 中的接口"""
+        try:
+            # 检查 adb 是否已启动
+            if self.scrcpy_process is None or self.scrcpy_process.poll() is not None:
+                scrcpy_path = os.path.join(os.path.dirname(__file__), "scrcpy", "scrcpy.exe")
+                if not os.path.exists(scrcpy_path):
+                    print(f"错误: 找不到 scrcpy.exe 路径: {scrcpy_path}")
+                    return
+                self.scrcpy_process = subprocess.Popen(
+                    [scrcpy_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                print("已启动 adb 投屏")
+            else:
+                print("adb 投屏已在运行中。")
+        except Exception as e:
+            print(f"启动 adb 投屏失败: {str(e)}")
+
     def closeEvent(self, event):
         """窗口关闭事件处理"""
         # 停止USB监控
@@ -2579,7 +2609,7 @@ class FileDownloadDialog(QDialog):
                     # 初始化设备文件夹复选框字典
                     self.device_folder_checkboxes[device] = {}
                     
-                    columns = 9  # 每行显示9个复选框
+                    columns = 5  # 每行显示5个复选框
                     for idx, (folder_path, custom_name) in enumerate(fixed_folders_dict.items()):
                         folder_checkbox = QCheckBox(custom_name)
                         # 设置鼠标悬浮提示，显示完整路径
@@ -3458,7 +3488,6 @@ class DownloadThread(QThread):
             print(f"[调试] 统计本地文件数量时出错: {e}")
             return 0
     
-
 
 
 if __name__ == "__main__":
