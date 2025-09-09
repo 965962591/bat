@@ -1239,7 +1239,7 @@ class FileOrganizer(QWidget):
             for fp in visible_files:
                 folder_to_files[os.path.dirname(fp)].append(fp)
             for folder_path, files in folder_to_files.items():
-                files.sort()
+                files.sort(key=self._natural_sort_key)
                 index_counter = 0
                 for file_path in files:
                     original_name = os.path.basename(file_path)
@@ -1319,6 +1319,21 @@ class FileOrganizer(QWidget):
             print(f"Error renaming {os.path.basename(original_path)}: {e}")
 
 
+    def _natural_sort_key(self, path_or_name):
+        """返回用于自然排序的键，使 '1' < '2' < '10'。
+
+        仅对末级文件名进行分段；非数字段使用小写比较以稳定排序。
+        """
+        try:
+            name = os.path.basename(path_or_name)
+        except Exception:
+            name = str(path_or_name)
+        try:
+            parts = re.split(r"(\d+)", name)
+            return [int(p) if p.isdigit() else p.lower() for p in parts]
+        except Exception:
+            return [name.lower()]
+
     def preview_rename(self):
         rename_data = []
         prefix = self.line_edit.currentText()
@@ -1337,7 +1352,7 @@ class FileOrganizer(QWidget):
         for fp in visible_files:
             folder_to_files[os.path.dirname(fp)].append(fp)
         for folder_path, files in folder_to_files.items():
-            files.sort()
+            files.sort(key=self._natural_sort_key)
             local_idx = 0
             for file_path in files:
                 original_name = os.path.basename(file_path)
