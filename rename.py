@@ -104,8 +104,11 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
             for p in self.included_paths:
                 if file_path_norm == p:
                     return True
-                # file_path 是 p 的祖先（目录）
+                # file_path 是 p 的祖先（目录）→ 显示祖先链以便展开到白名单项
                 if p.startswith(file_path_norm + os.sep):
+                    return True
+                # file_path 是 p 的后代（当 p 为目录时）→ 显示所选目录的所有子项
+                if file_path_norm.startswith(p + os.sep):
                     return True
             return False
         return True
@@ -870,7 +873,7 @@ class FileOrganizer(QWidget):
             self.right_tree.setRootIndex(QModelIndex())
         self.right_tree.setSelectionMode(QTreeView.ExtendedSelection)
         self.right_tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.right_tree.customContextMenuRequested.connect(self.open_context_menu_right)
+        # self.right_tree.customContextMenuRequested.connect(self.open_context_menu_right)
         self.right_tree.setAlternatingRowColors(True)
         self.right_tree.setRootIsDecorated(True)
         
@@ -1052,13 +1055,20 @@ class FileOrganizer(QWidget):
             self._right_excluded_paths = []
             self.right_proxy.clear_excluded()
             self.right_proxy.set_hide_all(False)
-            # 右侧仅显示所选文件（若选择的是文件）
+            # 根据选择内容设置白名单：
+            # - 若选择了文件：仅显示这些文件（及其祖先目录）
+            # - 否则若选择了文件夹：仅显示这些文件夹及其所有子项
             selected_files = []
-            for idx, p in zip(selected, paths):
+            selected_dirs = []
+            for p in paths:
                 if os.path.isfile(p):
                     selected_files.append(p)
+                elif os.path.isdir(p):
+                    selected_dirs.append(p)
             if selected_files:
                 self.right_proxy.set_included(set(selected_files))
+            elif selected_dirs:
+                self.right_proxy.set_included(set(selected_dirs))
             else:
                 self.right_proxy.clear_included()
             # 最后再设置右侧根到共同父目录（确保过滤状态已生效）
@@ -1215,18 +1225,8 @@ class FileOrganizer(QWidget):
             if not root_index.isValid():
                 QMessageBox.information(self, "提示", "右侧没有可重命名的文件")
                 return
-            # 构建可见文件列表（通过代理模型遍历）
-            visible_files = []
-            def collect_files(proxy_index):
-                rows = self.right_proxy.rowCount(proxy_index)
-                for i in range(rows):
-                    child_proxy = self.right_proxy.index(i, 0, proxy_index)
-                    source_idx = self.right_proxy.mapToSource(child_proxy)
-                    if self.right_model.isDir(source_idx):
-                        collect_files(child_proxy)
-                    else:
-                        visible_files.append(self.right_model.filePath(source_idx))
-            collect_files(root_index)
+            # 基于代理模型获取当前可见文件
+            visible_files = self.get_visible_files()
             if not visible_files:
                 QMessageBox.information(self, "提示", "右侧没有可重命名的文件")
                 return
@@ -1243,14 +1243,14 @@ class FileOrganizer(QWidget):
                 index_counter = 0
                 for file_path in files:
                     original_name = os.path.basename(file_path)
-                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+                    parent_folder_name = self.get_actual_cased_basename(os.path.dirname(folder_path))
                     if self.should_rename_file(original_name):
                         new_name = self.generate_new_name(
                             original_name,
                             prefix,
                             replace_text,
                             parent_folder_name,
-                            os.path.basename(folder_path),
+                            self.get_actual_cased_basename(folder_path),
                             index_counter,
                             hash_count,
                         )
@@ -1330,46 +1330,30 @@ class FileOrganizer(QWidget):
 
         hash_count = prefix.count("#")
 
-        root_index = self.right_tree.rootIndex()
-        if root_index.isValid():
-            # 基于可见文件生成预览
-            def collect_preview(proxy_index):
-                from collections import defaultdict
-                folder_to_files = defaultdict(list)
-                rows = self.right_proxy.rowCount(proxy_index)
-                for i in range(rows):
-                    child_proxy = self.right_proxy.index(i, 0, proxy_index)
-                    source_idx = self.right_proxy.mapToSource(child_proxy)
-                    if self.right_model.isDir(source_idx):
-                        # 合并子目录结果
-                        sub_map = collect_preview(child_proxy)
-                        for k, v in sub_map.items():
-                            folder_to_files[k].extend(v)
-                    else:
-                        file_path = self.right_model.filePath(source_idx)
-                        folder_path = os.path.dirname(file_path)
-                        folder_to_files[folder_path].append(file_path)
-                return folder_to_files
-
-            folder_to_files = collect_preview(root_index)
-            for folder_path, files in folder_to_files.items():
-                files.sort()
-                local_idx = 0
-                for file_path in files:
-                    original_name = os.path.basename(file_path)
-                    parent_folder_name = os.path.basename(os.path.dirname(folder_path))
-                    if self.should_rename_file(original_name):
-                        new_name = self.generate_new_name(
-                            original_name,
-                            prefix,
-                            replace_text,
-                            parent_folder_name,
-                            os.path.basename(folder_path),
-                            local_idx,
-                            hash_count,
-                        )
-                        rename_data.append((folder_path, original_name, new_name))
-                        local_idx += 1
+        # 基于代理模型的可见文件进行分组预览（支持不同父目录下的多个子目录）
+        from collections import defaultdict
+        visible_files = self.get_visible_files()
+        folder_to_files = defaultdict(list)
+        for fp in visible_files:
+            folder_to_files[os.path.dirname(fp)].append(fp)
+        for folder_path, files in folder_to_files.items():
+            files.sort()
+            local_idx = 0
+            for file_path in files:
+                original_name = os.path.basename(file_path)
+                parent_folder_name = self.get_actual_cased_basename(os.path.dirname(folder_path))
+                if self.should_rename_file(original_name):
+                    new_name = self.generate_new_name(
+                        original_name,
+                        prefix,
+                        replace_text,
+                        parent_folder_name,
+                        self.get_actual_cased_basename(folder_path),
+                        local_idx,
+                        hash_count,
+                    )
+                    rename_data.append((folder_path, original_name, new_name))
+                    local_idx += 1
 
         if rename_data:
             dialog = PreviewDialog(rename_data)
@@ -1415,10 +1399,49 @@ class FileOrganizer(QWidget):
     def get_visible_files(self):
         """获取右侧可见的文件列表"""
         visible_files = []
+        # 优先基于白名单直接遍历文件系统，避免必须点击展开目录才加载
+        included_paths = getattr(self.right_proxy, "included_paths", set())
+        excluded_paths = set(getattr(self, "_right_excluded_paths", []))
+
+        def is_excluded(path):
+            try:
+                norm = os.path.normcase(os.path.normpath(path))
+            except Exception:
+                norm = path
+            for p in excluded_paths:
+                if norm == p or norm.startswith(p + os.sep):
+                    return True
+            return False
+
+        if included_paths:
+            # 将代理模型保存的规范化路径还原为实际路径进行遍历
+            for p in list(included_paths):
+                try:
+                    # included_paths 已是规范化过的大小写无关路径，这里尽量获取真实存在的路径
+                    path = p
+                    if os.path.isfile(path):
+                        if not is_excluded(path):
+                            visible_files.append(path)
+                    elif os.path.isdir(path):
+                        for dirpath, dirnames, filenames in os.walk(path):
+                            # 应用排除规则到目录层级（剪枝）
+                            if is_excluded(dirpath):
+                                # 跳过该目录的后代
+                                dirnames[:] = []
+                                continue
+                            for name in filenames:
+                                fp = os.path.join(dirpath, name)
+                                if not is_excluded(fp) and os.path.isfile(fp):
+                                    visible_files.append(fp)
+                except Exception:
+                    continue
+            return visible_files
+
+        # 回退：无白名单时，按当前树可见范围遍历（保持原行为）
         root_index = self.right_tree.rootIndex()
         if not root_index.isValid():
             return visible_files
-            
+
         def collect_files(proxy_index):
             rows = self.right_proxy.rowCount(proxy_index)
             for i in range(rows):
@@ -1428,11 +1451,33 @@ class FileOrganizer(QWidget):
                     collect_files(child_proxy)
                 else:
                     file_path = self.right_model.filePath(source_idx)
-                    if os.path.isfile(file_path):
+                    if os.path.isfile(file_path) and not is_excluded(file_path):
                         visible_files.append(file_path)
-                        
+
         collect_files(root_index)
         return visible_files
+
+    def get_actual_cased_basename(self, path):
+        """在 Windows 上返回路径末级名称的实际大小写；其他平台直接返回 basename。
+
+        通过枚举父目录，对比不区分大小写名称以获取真实的条目名称。
+        """
+        try:
+            parent_dir = os.path.dirname(path)
+            target = os.path.basename(path)
+            if not parent_dir or not target:
+                return target
+            if not os.path.isdir(parent_dir):
+                return target
+            try:
+                for entry in os.listdir(parent_dir):
+                    if entry.lower() == target.lower():
+                        return entry
+            except Exception:
+                return target
+            return target
+        except Exception:
+            return os.path.basename(path)
 
     def show_help(self):
         help_text = (
@@ -1457,12 +1502,12 @@ class FileOrganizer(QWidget):
         menu.addAction(open_folder_action)
         menu.exec_(self.left_tree.viewport().mapToGlobal(position))
 
-    def open_context_menu_right(self, position):
-        menu = QMenu()
-        open_folder_action = QAction("在文件资源管理器中打开", self)
-        open_folder_action.triggered.connect(self.open_folder_in_explorer_right)
-        menu.addAction(open_folder_action)
-        menu.exec_(self.right_tree.viewport().mapToGlobal(position))
+    # def open_context_menu_right(self, position):
+    #     menu = QMenu()
+    #     open_folder_action = QAction("在文件资源管理器中打开", self)
+    #     open_folder_action.triggered.connect(self.open_folder_in_explorer_right)
+    #     menu.addAction(open_folder_action)
+    #     menu.exec_(self.right_tree.viewport().mapToGlobal(position))
 
     def open_folder_in_explorer(self):
         selected_indexes = self.left_tree.selectedIndexes()
@@ -1475,16 +1520,16 @@ class FileOrganizer(QWidget):
                 # 如果不是文件夹，打开文件所在的文件夹
                 os.startfile(os.path.dirname(file_path))
 
-    def open_folder_in_explorer_right(self):
-        selected_indexes = self.right_tree.selectedIndexes()
-        if selected_indexes:
-            index = selected_indexes[0]
-            file_path = self.right_model.filePath(index)
-            if os.path.isdir(file_path):
-                os.startfile(file_path)
-            else:
-                # 如果不是文件夹，打开文件所在的文件夹
-                os.startfile(os.path.dirname(file_path))
+    # def open_folder_in_explorer_right(self):
+    #     selected_indexes = self.right_tree.selectedIndexes()
+    #     if selected_indexes:
+    #         index = selected_indexes[0]
+    #         file_path = self.right_model.filePath(index)
+    #         if os.path.isdir(file_path):
+    #             os.startfile(file_path)
+    #         else:
+    #             # 如果不是文件夹，打开文件所在的文件夹
+    #             os.startfile(os.path.dirname(file_path))
 
     def expand_to_path(self, folder_path):
         """自动展开文件树到指定路径"""
