@@ -120,6 +120,7 @@ class PowerRenameDialog(QWidget):
         super().__init__(parent)
         self.file_list = file_list
         self.preview_data = []
+        self.updating_preview = False  # 添加标志位防止递归调用
         self.initUI()
         
     def initUI(self):
@@ -286,6 +287,11 @@ class PowerRenameDialog(QWidget):
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(0)
         
+        # 全选复选框
+        self.select_all_checkbox = QCheckBox()
+        self.select_all_checkbox.setChecked(True)  # 默认全选
+        self.select_all_checkbox.stateChanged.connect(self.toggle_select_all)
+        
         self.original_label = QLabel("原始 (0)")
         self.original_label.setFont(QFont("Arial", 10, QFont.Bold))
         self.renamed_label = QLabel("已重命名 (0)")
@@ -296,6 +302,7 @@ class PowerRenameDialog(QWidget):
         self.renamed_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         
         # 添加弹性空间，使标签与表格列对齐
+        title_layout.addWidget(self.select_all_checkbox)
         title_layout.addWidget(self.original_label)
         title_layout.addStretch(1)
         title_layout.addWidget(self.renamed_label)
@@ -305,12 +312,15 @@ class PowerRenameDialog(QWidget):
         
         # 预览表格
         self.preview_table = QTableWidget()
-        self.preview_table.setColumnCount(2)
-        self.preview_table.setHorizontalHeaderLabels(["原始文件名", "重命名后"])
+        self.preview_table.setColumnCount(3)
+        self.preview_table.setHorizontalHeaderLabels(["", "原始文件名", "重命名后"])
         
         # 设置表格属性
         header = self.preview_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # 复选框列固定宽度
+        header.setSectionResizeMode(1, QHeaderView.Stretch)  # 原始文件名列拉伸
+        header.setSectionResizeMode(2, QHeaderView.Stretch)  # 重命名后列拉伸
+        header.resizeSection(0, 30)  # 设置复选框列宽度
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.setSelectionBehavior(QTableWidget.SelectRows)
         
@@ -328,11 +338,7 @@ class PowerRenameDialog(QWidget):
         search_text = self.search_input.text()
         replace_text = self.replace_input.text()
         
-        # 如果没有查找文本，显示原始文件
-        if not search_text:
-            self.show_original_files()
-            return
-            
+        # 始终显示所有原始文件，但根据查找/替换条件更新重命名预览
         self.preview_data = []
         
         for file_path in self.file_list:
@@ -341,6 +347,11 @@ class PowerRenameDialog(QWidget):
                 
             original_name = os.path.basename(file_path)
             folder_path = os.path.dirname(file_path)
+            
+            # 如果没有查找文本，重命名列为空
+            if not search_text:
+                self.preview_data.append((folder_path, original_name, original_name))
+                continue
             
             # 根据"应用于"复选框确定处理范围
             if self.include_files_checkbox.isChecked():
@@ -352,9 +363,8 @@ class PowerRenameDialog(QWidget):
             else:
                 new_name = original_name
             
-            # 只添加需要重命名的文件到预览数据中
-            if new_name != original_name:
-                self.preview_data.append((folder_path, original_name, new_name))
+            # 添加所有文件到预览数据中，包括不修改的文件
+            self.preview_data.append((folder_path, original_name, new_name))
         
         self.update_preview_table()
         
@@ -362,7 +372,7 @@ class PowerRenameDialog(QWidget):
         """显示原始文件列表"""
         self.preview_data = []
         
-        # 只显示最初传入的文件，不重新扫描目录
+        # 显示所有原始文件，包括重命名后的文件
         for file_path in self.file_list:
             if not os.path.isfile(file_path):
                 continue
@@ -370,7 +380,7 @@ class PowerRenameDialog(QWidget):
             original_name = os.path.basename(file_path)
             folder_path = os.path.dirname(file_path)
             
-            # 显示原始文件名
+            # 显示原始文件名，用于程序启动时显示
             self.preview_data.append((folder_path, original_name, original_name))
         
         print(f"显示原始文件: {len(self.preview_data)} 个文件")
@@ -480,38 +490,185 @@ class PowerRenameDialog(QWidget):
                 
         return result
         
+    def on_checkbox_changed(self):
+        """复选框状态变化时的处理"""
+        # 防止递归调用
+        if self.updating_preview:
+            return
+            
+        # 更新全选复选框状态
+        self.update_select_all_checkbox_state()
+        # 无论是否有查找文本，都需要更新预览表格以反映复选框状态
+        self.update_preview_table()
+    
+    def toggle_select_all(self, state):
+        """全选/取消全选所有复选框"""
+        # 防止递归调用
+        if self.updating_preview:
+            return
+            
+        is_checked = state == Qt.Checked
+        for row in range(self.preview_table.rowCount()):
+            checkbox = self.preview_table.cellWidget(row, 0)
+            if checkbox:
+                # 阻止信号，避免在设置状态时触发信号
+                checkbox.blockSignals(True)
+                checkbox.setChecked(is_checked)
+                checkbox.blockSignals(False)
+        
+        # 全选/取消全选后，更新预览显示
+        self.update_rename_column_display()
+        # 更新标题统计
+        self.update_title_counts()
+    
+    def update_select_all_checkbox_state(self):
+        """更新全选复选框的状态"""
+        if self.preview_table.rowCount() == 0:
+            # 阻止信号，避免在设置状态时触发信号
+            self.select_all_checkbox.blockSignals(True)
+            self.select_all_checkbox.setChecked(False)
+            self.select_all_checkbox.blockSignals(False)
+            return
+            
+        checked_count = 0
+        for row in range(self.preview_table.rowCount()):
+            checkbox = self.preview_table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked():
+                checked_count += 1
+        
+        # 阻止信号，避免在设置状态时触发信号
+        self.select_all_checkbox.blockSignals(True)
+        # 根据选中状态更新全选复选框
+        if checked_count == 0:
+            self.select_all_checkbox.setChecked(False)
+        elif checked_count == self.preview_table.rowCount():
+            self.select_all_checkbox.setChecked(True)
+        else:
+            # 部分选中状态，可以设置为三态复选框
+            self.select_all_checkbox.setChecked(False)
+        self.select_all_checkbox.blockSignals(False)
+        
     def update_preview_table(self):
         """更新预览表格"""
-        self.preview_table.setRowCount(len(self.preview_data))
+        # 设置标志位，防止递归调用
+        self.updating_preview = True
         
-        for row, (folder, old_name, new_name) in enumerate(self.preview_data):
-            self.preview_table.setItem(row, 0, QTableWidgetItem(old_name))
-            self.preview_table.setItem(row, 1, QTableWidgetItem(new_name))
-        
-        # 更新标题 - 显示总文件数和需要重命名的文件数
+        try:
+            # 保存当前复选框状态
+            checkbox_states = {}
+            for row in range(self.preview_table.rowCount()):
+                checkbox = self.preview_table.cellWidget(row, 0)
+                if checkbox:
+                    checkbox_states[row] = checkbox.isChecked()
+            
+            self.preview_table.setRowCount(len(self.preview_data))
+            
+            for row, (folder, old_name, new_name) in enumerate(self.preview_data):
+                # 第一列：复选框
+                checkbox = QCheckBox()
+                # 阻止信号，避免在设置状态时触发信号
+                checkbox.blockSignals(True)
+                # 恢复之前的选中状态，如果没有则默认选中
+                checkbox.setChecked(checkbox_states.get(row, True))
+                # 重新启用信号
+                checkbox.blockSignals(False)
+                # 连接复选框状态变化信号，实时更新预览
+                checkbox.stateChanged.connect(self.on_checkbox_changed)
+                self.preview_table.setCellWidget(row, 0, checkbox)
+                
+                # 第二列：原始文件名
+                self.preview_table.setItem(row, 1, QTableWidgetItem(old_name))
+                
+                # 第三列：重命名后 - 根据复选框状态和修改情况显示
+                # 注意：这里需要在复选框创建之后才能获取其状态
+                # 所以先设置一个占位符，稍后更新
+                self.preview_table.setItem(row, 2, QTableWidgetItem(""))
+            
+            # 更新全选复选框状态
+            self.update_select_all_checkbox_state()
+            
+            # 更新"重命名后"列的显示
+            self.update_rename_column_display()
+            
+            # 更新标题统计
+            self.update_title_counts()
+            
+        finally:
+            # 重置标志位
+            self.updating_preview = False
+    
+    def update_rename_column_display(self):
+        """更新"重命名后"列的显示，根据复选框状态和修改情况"""
+        for row in range(self.preview_table.rowCount()):
+            if row < len(self.preview_data):
+                folder, old_name, new_name = self.preview_data[row]
+                checkbox = self.preview_table.cellWidget(row, 0)
+                
+                if checkbox and checkbox.isChecked() and new_name != old_name:
+                    # 只有被勾选且会被修改的文件才显示新名称
+                    self.preview_table.setItem(row, 2, QTableWidgetItem(new_name))
+                else:
+                    # 未勾选或不会被修改的文件显示空
+                    self.preview_table.setItem(row, 2, QTableWidgetItem(""))
+    
+    def update_title_counts(self):
+        """更新标题统计信息"""
         total_files = len(self.file_list)
-        rename_files = len(self.preview_data)
+        # 计算被勾选且会被重命名的文件数量
+        rename_files = 0
+        for row in range(self.preview_table.rowCount()):
+            checkbox = self.preview_table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked() and row < len(self.preview_data):
+                folder, old_name, new_name = self.preview_data[row]
+                if new_name != old_name:
+                    rename_files += 1
         self.original_label.setText(f"原始 ({total_files})")
         self.renamed_label.setText(f"已重命名 ({rename_files})")
         
+    def get_current_selected_files(self):
+        """获取当前被勾选的文件路径列表"""
+        selected_files = []
+        for row in range(self.preview_table.rowCount()):
+            checkbox = self.preview_table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked():
+                if row < len(self.preview_data):
+                    folder, old_name, new_name = self.preview_data[row]
+                    file_path = os.path.join(folder, old_name)
+                    selected_files.append(file_path)
+        return selected_files
+
+    def get_selected_files(self):
+        """获取被勾选的文件列表"""
+        selected_files = []
+        for row in range(self.preview_table.rowCount()):
+            checkbox = self.preview_table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked():
+                if row < len(self.preview_data):
+                    selected_files.append(self.preview_data[row])
+        return selected_files
+
     def apply_rename(self):
         """应用重命名"""
-        if not self.preview_data:
-            QMessageBox.information(self, "提示", "没有可重命名的文件")
+        # 获取被勾选的文件
+        selected_files = self.get_selected_files()
+        if not selected_files:
+            QMessageBox.information(self, "提示", "没有选中要重命名的文件")
             return
             
         try:
             success_count = 0
             failed_files = []
+            actual_rename_count = 0
             
-            print(f"开始重命名，共 {len(self.preview_data)} 个文件")
+            print(f"开始重命名，共 {len(selected_files)} 个选中文件")
             
-            for folder, old_name, new_name in self.preview_data:
+            for folder, old_name, new_name in selected_files:
                 # 跳过文件名相同的文件（不需要重命名）
                 if old_name == new_name:
                     print(f"跳过相同文件名: {old_name}")
                     continue
                     
+                actual_rename_count += 1
                 old_path = os.path.join(folder, old_name)
                 new_path = os.path.join(folder, new_name)
                 
@@ -538,15 +695,15 @@ class PowerRenameDialog(QWidget):
                     
             # 显示重命名结果
             if failed_files:
-                QMessageBox.warning(self, "重命名完成", f"成功重命名 {success_count} 个文件\n失败 {len(failed_files)} 个文件")
+                QMessageBox.warning(self, "重命名完成", f"选中 {len(selected_files)} 个文件\n实际需要重命名 {actual_rename_count} 个文件\n成功重命名 {success_count} 个文件\n失败 {len(failed_files)} 个文件")
             else:
                 pass
             
-            print(f"重命名完成: 成功 {success_count} 个，失败 {len(failed_files)} 个")
+            print(f"重命名完成: 选中 {len(selected_files)} 个，实际重命名 {actual_rename_count} 个，成功 {success_count} 个，失败 {len(failed_files)} 个")
                 
             # 重命名完成后重新获取文件列表并显示
             self.refresh_file_list_after_rename()
-            self.show_original_files()
+            self.update_preview()  # 使用update_preview而不是show_original_files
             
         except Exception as e:
             QMessageBox.critical(self, "错误", f"重命名失败: {str(e)}")
@@ -581,23 +738,17 @@ class PowerRenameDialog(QWidget):
         
     def refresh_file_list_after_rename(self):
         """重命名后刷新文件列表"""
-        # 从preview_data中获取重命名后的文件路径
+        # 重新扫描完整文件夹内容
         new_file_list = []
-        for folder, old_name, new_name in self.preview_data:
-            if old_name != new_name:
-                # 文件被重命名了，使用新文件名
-                new_path = os.path.join(folder, new_name)
-                if os.path.exists(new_path):
-                    new_file_list.append(new_path)
-            else:
-                # 文件没有被重命名，使用原文件名
-                old_path = os.path.join(folder, old_name)
-                if os.path.exists(old_path):
-                    new_file_list.append(old_path)
         
-        # 如果新文件列表为空，尝试从原目录获取文件
-        if not new_file_list and self.preview_data:
-            folder = self.preview_data[0][0]  # 获取第一个文件的目录
+        # 从原始文件列表中获取所有目录
+        folders = set()
+        for file_path in self.file_list:
+            folder = os.path.dirname(file_path)
+            folders.add(folder)
+        
+        # 扫描每个目录中的所有文件
+        for folder in folders:
             if os.path.exists(folder):
                 for filename in os.listdir(folder):
                     full_path = os.path.join(folder, filename)
