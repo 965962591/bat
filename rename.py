@@ -281,16 +281,25 @@ class PowerRenameDialog(QWidget):
         panel.setFrameStyle(QFrame.StyledPanel)
         layout = QVBoxLayout()
         
-        # 预览标题
+        # 预览标题 - 使用网格布局确保对齐
         title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(0)
+        
         self.original_label = QLabel("原始 (0)")
         self.original_label.setFont(QFont("Arial", 10, QFont.Bold))
         self.renamed_label = QLabel("已重命名 (0)")
         self.renamed_label.setFont(QFont("Arial", 10, QFont.Bold))
         
+        # 设置标签样式，确保与表格列对齐
+        self.original_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.renamed_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        
+        # 添加弹性空间，使标签与表格列对齐
         title_layout.addWidget(self.original_label)
+        title_layout.addStretch(1)
         title_layout.addWidget(self.renamed_label)
-        title_layout.addStretch()
+        title_layout.addStretch(1)
         
         layout.addLayout(title_layout)
         
@@ -304,6 +313,10 @@ class PowerRenameDialog(QWidget):
         header.setSectionResizeMode(QHeaderView.Stretch)
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        
+        # 设置表格边距，确保与标题对齐
+        self.preview_table.setContentsMargins(0, 0, 0, 0)
+        self.preview_table.setShowGrid(True)
         
         layout.addWidget(self.preview_table)
         
