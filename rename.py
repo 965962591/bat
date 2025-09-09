@@ -126,6 +126,21 @@ class PowerRenameDialog(QWidget):
         self.updating_preview = False  # 添加标志位防止递归调用
         self.initUI()
         
+    def _natural_sort_key(self, path_or_name):
+        """返回用于自然排序的键，使 '1' < '2' < '10'。
+
+        仅对末级文件名进行分段；非数字段使用小写比较以稳定排序。
+        """
+        try:
+            name = os.path.basename(path_or_name)
+        except Exception:
+            name = str(path_or_name)
+        try:
+            parts = re.split(r"(\d+)", name)
+            return [int(p) if p.isdigit() else p.lower() for p in parts]
+        except Exception:
+            return [name.lower()]
+
     def initUI(self):
         self.setWindowTitle("PowerRename - 查找替换")
         self.resize(1000, 700)
@@ -344,7 +359,7 @@ class PowerRenameDialog(QWidget):
         # 始终显示所有原始文件，但根据查找/替换条件更新重命名预览
         self.preview_data = []
         
-        for file_path in self.file_list:
+        for file_path in sorted(self.file_list, key=self._natural_sort_key):
             if not os.path.isfile(file_path):
                 continue
                 
@@ -376,7 +391,7 @@ class PowerRenameDialog(QWidget):
         self.preview_data = []
         
         # 显示所有原始文件，包括重命名后的文件
-        for file_path in self.file_list:
+        for file_path in sorted(self.file_list, key=self._natural_sort_key):
             if not os.path.isfile(file_path):
                 continue
                 
