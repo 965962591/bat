@@ -1,6 +1,7 @@
 import sys
 import os
 import tempfile
+import re
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -20,9 +21,13 @@ from PyQt5.QtWidgets import (
     QMenu,
     QAction,
     QTreeView,
+    QGroupBox,
+    QSplitter,
+    QFrame,
+    QScrollArea,
 )
 from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex
-from PyQt5.QtGui import QKeySequence, QIcon
+from PyQt5.QtGui import QKeySequence, QIcon, QFont
 from PyQt5.QtWidgets import QShortcut, QFileSystemModel
 from PyQt5.QtCore import QSortFilterProxyModel
 
@@ -107,6 +112,491 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
 
 
 
+class PowerRenameDialog(QWidget):
+    # 定义信号
+    window_closed = pyqtSignal()
+    
+    def __init__(self, file_list, parent=None):
+        super().__init__(parent)
+        self.file_list = file_list
+        self.preview_data = []
+        self.initUI()
+        
+    def initUI(self):
+        self.setWindowTitle("PowerRename - 查找替换")
+        self.resize(1000, 700)
+        self.setMinimumSize(800, 600)
+        
+        # 设置图标
+        icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
+        self.setWindowIcon(QIcon(icon_path))
+        
+        # 主布局
+        main_layout = QVBoxLayout()
+        
+        # 创建分割器
+        splitter = QSplitter(Qt.Horizontal)
+        
+        # 左侧控制面板
+        left_panel = self.create_control_panel()
+        splitter.addWidget(left_panel)
+        
+        # 右侧预览面板
+        right_panel = self.create_preview_panel()
+        splitter.addWidget(right_panel)
+        
+        # 设置分割器比例
+        splitter.setSizes([400, 600])
+        
+        main_layout.addWidget(splitter)
+        self.setLayout(main_layout)
+        
+        # 初始化预览 - 默认显示原始文件
+        self.show_original_files()
+        
+    def create_control_panel(self):
+        """创建左侧控制面板"""
+        panel = QFrame()
+        panel.setFrameStyle(QFrame.StyledPanel)
+        layout = QVBoxLayout()
+        
+        # 查找字段
+        search_group = QGroupBox("查找")
+        search_layout = QVBoxLayout()
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("输入要查找的文本")
+        self.search_input.textChanged.connect(self.update_preview)
+        search_layout.addWidget(self.search_input)
+        
+        # 选项复选框
+        options_layout = QVBoxLayout()
+        self.regex_checkbox = QCheckBox("使用正则表达式")
+        self.regex_checkbox.stateChanged.connect(self.update_preview)
+        self.match_all_checkbox = QCheckBox("匹配所有出现的对象")
+        self.match_all_checkbox.stateChanged.connect(self.update_preview)
+        self.case_sensitive_checkbox = QCheckBox("区分大小写")
+        self.case_sensitive_checkbox.stateChanged.connect(self.update_preview)
+        
+        options_layout.addWidget(self.regex_checkbox)
+        options_layout.addWidget(self.match_all_checkbox)
+        options_layout.addWidget(self.case_sensitive_checkbox)
+        search_layout.addLayout(options_layout)
+        
+        search_group.setLayout(search_layout)
+        layout.addWidget(search_group)
+        
+        # 替换字段
+        replace_group = QGroupBox("替换")
+        replace_layout = QVBoxLayout()
+        
+        self.replace_input = QLineEdit()
+        self.replace_input.setPlaceholderText("输入替换文本")
+        self.replace_input.textChanged.connect(self.update_preview)
+        replace_layout.addWidget(self.replace_input)
+        
+        # 应用于选项 - 改为复选框，水平布局
+        apply_group = QGroupBox("应用于")
+        apply_layout = QHBoxLayout()
+        
+        self.include_files_checkbox = QCheckBox("包含文件")
+        self.include_files_checkbox.setChecked(True)  # 默认勾选
+        self.include_files_checkbox.stateChanged.connect(self.update_preview)
+        
+        self.include_folders_checkbox = QCheckBox("包含文件夹")
+        self.include_folders_checkbox.stateChanged.connect(self.update_preview)
+        
+        self.include_subfolders_checkbox = QCheckBox("包含子文件夹")
+        self.include_subfolders_checkbox.stateChanged.connect(self.update_preview)
+        
+        apply_layout.addWidget(self.include_files_checkbox)
+        apply_layout.addWidget(self.include_folders_checkbox)
+        apply_layout.addWidget(self.include_subfolders_checkbox)
+        
+        apply_group.setLayout(apply_layout)
+        replace_layout.addWidget(apply_group)
+        
+        replace_group.setLayout(replace_layout)
+        layout.addWidget(replace_group)
+        
+        # 文本格式 - 改为单选框，水平布局
+        format_group = QGroupBox("文本格式")
+        format_layout = QHBoxLayout()
+        
+        # 创建按钮组用于单选框
+        from PyQt5.QtWidgets import QButtonGroup
+        self.format_button_group = QButtonGroup()
+        
+        self.lowercase_radio = QPushButton("aa")
+        self.lowercase_radio.setCheckable(True)
+        self.lowercase_radio.setToolTip("小写")
+        self.lowercase_radio.clicked.connect(self.apply_text_format)
+        
+        self.uppercase_radio = QPushButton("AA")
+        self.uppercase_radio.setCheckable(True)
+        self.uppercase_radio.setToolTip("大写")
+        self.uppercase_radio.clicked.connect(self.apply_text_format)
+        
+        self.capitalize_radio = QPushButton("Aa")
+        self.capitalize_radio.setCheckable(True)
+        self.capitalize_radio.setToolTip("首字母大写")
+        self.capitalize_radio.clicked.connect(self.apply_text_format)
+        
+        self.title_radio = QPushButton("Aa Aa")
+        self.title_radio.setCheckable(True)
+        self.title_radio.setToolTip("每个单词首字母大写")
+        self.title_radio.clicked.connect(self.apply_text_format)
+        
+        # 添加到按钮组
+        self.format_button_group.addButton(self.lowercase_radio, 0)
+        self.format_button_group.addButton(self.uppercase_radio, 1)
+        self.format_button_group.addButton(self.capitalize_radio, 2)
+        self.format_button_group.addButton(self.title_radio, 3)
+        
+        format_layout.addWidget(self.lowercase_radio)
+        format_layout.addWidget(self.uppercase_radio)
+        format_layout.addWidget(self.capitalize_radio)
+        format_layout.addWidget(self.title_radio)
+        
+        format_group.setLayout(format_layout)
+        layout.addWidget(format_group)
+        
+        # 底部按钮 - 将应用按钮放到右下角
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()  # 添加弹性空间，将按钮推到右边
+        self.apply_btn = QPushButton("应用")
+        self.apply_btn.clicked.connect(self.apply_rename)
+        self.apply_btn.setMinimumWidth(80)  # 设置按钮最小宽度
+        
+        button_layout.addWidget(self.apply_btn)
+        
+        layout.addLayout(button_layout)
+        
+        panel.setLayout(layout)
+        return panel
+        
+    def create_preview_panel(self):
+        """创建右侧预览面板"""
+        panel = QFrame()
+        panel.setFrameStyle(QFrame.StyledPanel)
+        layout = QVBoxLayout()
+        
+        # 预览标题
+        title_layout = QHBoxLayout()
+        self.original_label = QLabel("原始 (0)")
+        self.original_label.setFont(QFont("Arial", 10, QFont.Bold))
+        self.renamed_label = QLabel("已重命名 (0)")
+        self.renamed_label.setFont(QFont("Arial", 10, QFont.Bold))
+        
+        title_layout.addWidget(self.original_label)
+        title_layout.addWidget(self.renamed_label)
+        title_layout.addStretch()
+        
+        layout.addLayout(title_layout)
+        
+        # 预览表格
+        self.preview_table = QTableWidget()
+        self.preview_table.setColumnCount(2)
+        self.preview_table.setHorizontalHeaderLabels(["原始文件名", "重命名后"])
+        
+        # 设置表格属性
+        header = self.preview_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        
+        layout.addWidget(self.preview_table)
+        
+        panel.setLayout(layout)
+        return panel
+        
+    def update_preview(self):
+        """更新预览"""
+        search_text = self.search_input.text()
+        replace_text = self.replace_input.text()
+        
+        # 如果没有查找文本，显示原始文件
+        if not search_text:
+            self.show_original_files()
+            return
+            
+        self.preview_data = []
+        
+        for file_path in self.file_list:
+            if not os.path.isfile(file_path):
+                continue
+                
+            original_name = os.path.basename(file_path)
+            folder_path = os.path.dirname(file_path)
+            
+            # 根据"应用于"复选框确定处理范围
+            if self.include_files_checkbox.isChecked():
+                # 处理文件名
+                name_part = os.path.splitext(original_name)[0]
+                ext_part = os.path.splitext(original_name)[1]
+                new_name_part = self.perform_replace(name_part, search_text, replace_text)
+                new_name = new_name_part + ext_part
+            else:
+                new_name = original_name
+            
+            # 无论文件名是否相同，都添加到预览数据中
+            self.preview_data.append((folder_path, original_name, new_name))
+        
+        self.update_preview_table()
+        
+    def show_original_files(self):
+        """显示原始文件列表"""
+        self.preview_data = []
+        
+        # 只显示最初传入的文件，不重新扫描目录
+        for file_path in self.file_list:
+            if not os.path.isfile(file_path):
+                continue
+                
+            original_name = os.path.basename(file_path)
+            folder_path = os.path.dirname(file_path)
+            
+            # 显示原始文件名
+            self.preview_data.append((folder_path, original_name, original_name))
+        
+        print(f"显示原始文件: {len(self.preview_data)} 个文件")
+        self.update_preview_table()
+        
+    def apply_text_format(self):
+        """应用文本格式 - 触发预览更新"""
+        # 文本格式改变时，重新计算预览
+        self.update_preview()
+        
+    def format_text(self, text, button):
+        """根据选中的按钮格式化文本"""
+        if button == self.lowercase_radio:
+            return text.lower()
+        elif button == self.uppercase_radio:
+            return text.upper()
+        elif button == self.capitalize_radio:
+            return text.capitalize()
+        elif button == self.title_radio:
+            return text.title()
+        return text
+        
+    def perform_replace(self, text, search_text, replace_text):
+        """执行替换操作"""
+        if not search_text:
+            return text
+            
+        try:
+            if self.regex_checkbox.isChecked():
+                # 使用正则表达式
+                flags = 0 if self.case_sensitive_checkbox.isChecked() else re.IGNORECASE
+                if self.match_all_checkbox.isChecked():
+                    new_text = re.sub(search_text, replace_text, text, flags=flags)
+                else:
+                    new_text = re.sub(search_text, replace_text, text, count=1, flags=flags)
+            else:
+                # 普通文本替换
+                if self.case_sensitive_checkbox.isChecked():
+                    if self.match_all_checkbox.isChecked():
+                        new_text = text.replace(search_text, replace_text)
+                    else:
+                        new_text = text.replace(search_text, replace_text, 1)
+                else:
+                    # 不区分大小写 - 使用简单的不区分大小写替换
+                    new_text = self.case_insensitive_replace(text, search_text, replace_text, self.match_all_checkbox.isChecked())
+        except Exception as e:
+            print(f"替换错误: {e}")
+            print(f"查找文本: '{search_text}'")
+            print(f"替换文本: '{replace_text}'")
+            print(f"原文本: '{text}'")
+            print(f"使用正则表达式: {self.regex_checkbox.isChecked()}")
+            print(f"区分大小写: {self.case_sensitive_checkbox.isChecked()}")
+            print(f"匹配所有: {self.match_all_checkbox.isChecked()}")
+            
+            # 如果正则表达式失败，回退到普通字符串替换
+            try:
+                if self.case_sensitive_checkbox.isChecked():
+                    new_text = text.replace(search_text, replace_text)
+                else:
+                    # 不区分大小写的简单替换
+                    new_text = text.replace(search_text.lower(), replace_text.lower())
+                    # 如果小写替换没有效果，尝试原样替换
+                    if new_text == text:
+                        new_text = text.replace(search_text, replace_text)
+            except Exception as e2:
+                print(f"回退替换也失败: {e2}")
+                return text
+        
+        # 应用文本格式到替换后的文本
+        new_text = self.apply_text_format_to_result(new_text)
+        return new_text
+        
+    def apply_text_format_to_result(self, text):
+        """对重命名结果应用文本格式"""
+        # 获取当前选中的格式按钮
+        selected_button = self.format_button_group.checkedButton()
+        if not selected_button:
+            return text
+            
+        return self.format_text(text, selected_button)
+        
+    def case_insensitive_replace(self, text, search_text, replace_text, replace_all=True):
+        """不区分大小写的字符串替换"""
+        if not search_text:
+            return text
+            
+        result = text
+        search_lower = search_text.lower()
+        text_lower = text.lower()
+        
+        if replace_all:
+            # 替换所有匹配项
+            start = 0
+            while True:
+                pos = text_lower.find(search_lower, start)
+                if pos == -1:
+                    break
+                # 找到匹配位置，进行替换
+                result = result[:pos] + replace_text + result[pos + len(search_text):]
+                text_lower = result.lower()  # 更新小写版本
+                start = pos + len(replace_text)
+        else:
+            # 只替换第一个匹配项
+            pos = text_lower.find(search_lower)
+            if pos != -1:
+                result = result[:pos] + replace_text + result[pos + len(search_text):]
+                
+        return result
+        
+    def update_preview_table(self):
+        """更新预览表格"""
+        self.preview_table.setRowCount(len(self.preview_data))
+        
+        for row, (folder, old_name, new_name) in enumerate(self.preview_data):
+            self.preview_table.setItem(row, 0, QTableWidgetItem(old_name))
+            self.preview_table.setItem(row, 1, QTableWidgetItem(new_name))
+        
+        # 更新标题
+        self.original_label.setText(f"原始 ({len(self.preview_data)})")
+        self.renamed_label.setText(f"已重命名 ({len(self.preview_data)})")
+        
+    def apply_rename(self):
+        """应用重命名"""
+        if not self.preview_data:
+            QMessageBox.information(self, "提示", "没有可重命名的文件")
+            return
+            
+        try:
+            success_count = 0
+            failed_files = []
+            
+            print(f"开始重命名，共 {len(self.preview_data)} 个文件")
+            
+            for folder, old_name, new_name in self.preview_data:
+                # 跳过文件名相同的文件（不需要重命名）
+                if old_name == new_name:
+                    print(f"跳过相同文件名: {old_name}")
+                    continue
+                    
+                old_path = os.path.join(folder, old_name)
+                new_path = os.path.join(folder, new_name)
+                
+                print(f"尝试重命名: {old_path} -> {new_path}")
+                print(f"原文件存在: {os.path.exists(old_path)}")
+                print(f"新文件存在: {os.path.exists(new_path)}")
+                
+                if os.path.exists(old_path):
+                    if not os.path.exists(new_path):
+                        try:
+                            os.rename(old_path, new_path)
+                            success_count += 1
+                            print(f"重命名成功: {old_name} -> {new_name}")
+                        except Exception as e:
+                            print(f"重命名失败: {e}")
+                            failed_files.append(f"{old_name}: {str(e)}")
+                    else:
+                        # 目标文件已存在，直接提示失败
+                        print(f"目标文件已存在: {new_path}")
+                        failed_files.append(f"{old_name}: 目标文件已存在")
+                else:
+                    print(f"原文件不存在: {old_path}")
+                    failed_files.append(f"{old_name}: 原文件不存在")
+                    
+            # 显示重命名结果
+            if failed_files:
+                QMessageBox.warning(self, "重命名完成", f"成功重命名 {success_count} 个文件\n失败 {len(failed_files)} 个文件")
+            else:
+                pass
+            
+            print(f"重命名完成: 成功 {success_count} 个，失败 {len(failed_files)} 个")
+                
+            # 重命名完成后重新获取文件列表并显示
+            self.refresh_file_list_after_rename()
+            self.show_original_files()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"重命名失败: {str(e)}")
+            print(f"重命名异常: {e}")
+            
+    def update_file_list(self):
+        """更新文件列表，只更新重命名后的文件路径"""
+        # 不重新扫描整个目录，只更新已重命名的文件路径
+        updated_files = []
+        for file_path in self.file_list:
+            if os.path.exists(file_path):
+                updated_files.append(file_path)
+            else:
+                # 如果原文件不存在，可能是被重命名了，尝试找到新文件
+                folder = os.path.dirname(file_path)
+                original_name = os.path.basename(file_path)
+                
+                # 在同一个目录下查找可能的匹配文件
+                if os.path.exists(folder):
+                    for filename in os.listdir(folder):
+                        full_path = os.path.join(folder, filename)
+                        if os.path.isfile(full_path):
+                            # 检查是否是重命名后的文件（通过时间戳等判断）
+                            # 这里简化处理，直接添加找到的文件
+                            updated_files.append(full_path)
+        
+        # 限制文件数量，避免扫描过多文件
+        if len(updated_files) > 1000:
+            updated_files = updated_files[:1000]
+            
+        self.file_list = updated_files
+        
+    def refresh_file_list_after_rename(self):
+        """重命名后刷新文件列表"""
+        # 从preview_data中获取重命名后的文件路径
+        new_file_list = []
+        for folder, old_name, new_name in self.preview_data:
+            if old_name != new_name:
+                # 文件被重命名了，使用新文件名
+                new_path = os.path.join(folder, new_name)
+                if os.path.exists(new_path):
+                    new_file_list.append(new_path)
+            else:
+                # 文件没有被重命名，使用原文件名
+                old_path = os.path.join(folder, old_name)
+                if os.path.exists(old_path):
+                    new_file_list.append(old_path)
+        
+        # 如果新文件列表为空，尝试从原目录获取文件
+        if not new_file_list and self.preview_data:
+            folder = self.preview_data[0][0]  # 获取第一个文件的目录
+            if os.path.exists(folder):
+                for filename in os.listdir(folder):
+                    full_path = os.path.join(folder, filename)
+                    if os.path.isfile(full_path):
+                        new_file_list.append(full_path)
+        
+        self.file_list = new_file_list
+        print(f"重命名后刷新文件列表: {len(self.file_list)} 个文件")
+        
+    def closeEvent(self, event):
+        """窗口关闭事件"""
+        self.window_closed.emit()
+        super().closeEvent(event)
+
+
 class PreviewDialog(QDialog):
     def __init__(self, rename_data):
         super().__init__()
@@ -157,11 +647,6 @@ class FileOrganizer(QWidget):
 
         # 文件夹选择布局
         folder_layout = QHBoxLayout()
-        self.folder_input = QLineEdit(self)
-        self.import_button = QPushButton("导入", self)
-        self.import_button.clicked.connect(self.select_folder)
-        folder_layout.addWidget(self.folder_input)
-        folder_layout.addWidget(self.import_button)
 
         # 左侧布局
         left_layout = QVBoxLayout()
@@ -235,8 +720,6 @@ class FileOrganizer(QWidget):
 
         # 右侧下方布局
         right_bottom_layout = QHBoxLayout()
-        self.replace_checkbox = QCheckBox("查找替换", self)
-        self.replace_checkbox.stateChanged.connect(self.toggle_replace)
 
         # 输入框
         self.line_edit = QComboBox(self)
@@ -265,13 +748,17 @@ class FileOrganizer(QWidget):
         # 新增帮助按钮
         self.help_button = QPushButton("帮助", self)
         self.help_button.clicked.connect(self.show_help)
+        
+        # 新增PowerRename按钮
+        self.power_rename_button = QPushButton("PowerRename", self)
+        self.power_rename_button.clicked.connect(self.open_power_rename)
 
-        right_bottom_layout.addWidget(self.replace_checkbox)
         right_bottom_layout.addWidget(self.line_edit)
         right_bottom_layout.addWidget(self.replace_line_edit)
 
         right_bottom_layout.addWidget(self.start_button)
         right_bottom_layout.addWidget(self.preview_button)
+        right_bottom_layout.addWidget(self.power_rename_button)  # 添加PowerRename按钮
         right_bottom_layout.addWidget(self.help_button)  # 添加帮助按钮
 
         # 在这里增加可伸缩的空间
@@ -328,54 +815,13 @@ class FileOrganizer(QWidget):
 
         # 加载上次打开的文件夹
         if last_folder := self.settings.value("lastFolder", ""):
-            self.folder_input.setText(last_folder)
             self.set_folder_path(last_folder)
-
-        self.folder_input.returnPressed.connect(self.on_folder_input_enter)
 
         # 添加ESC键退出快捷键
         self.shortcut_esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self.shortcut_esc.activated.connect(self.close)
 
         self.show()
-
-    def select_folder(self, folder=None):
-        if not folder:
-            folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
-
-        if folder:
-            if isinstance(folder, str):
-                if os.path.isdir(folder):
-                    self.folder_input.setText(folder)
-                    self.set_folder_path(folder)
-                    self.settings.setValue("lastFolder", folder)
-                else:
-                    # 信息提示框
-                    QMessageBox.information(self, "提示", "传入的路径不是有效的文件夹")
-            elif isinstance(folder, list):
-                # 选择列表中的首个文件的上上级文件夹添加到左侧列表
-                folder_list = os.path.dirname(os.path.dirname(folder[0]))
-                if os.path.isdir(folder_list):
-                    self.folder_input.setText(folder_list)
-                    self.set_folder_path(folder_list)
-                else:
-                    # 信息提示框
-                    QMessageBox.information(self, "提示", "传入的路径不是有效的文件夹")
-                # 将列表中的文件添加到右侧列表
-                for file in folder:
-                    if os.path.isfile(file):
-                        self.add_file_to_right_tree(file)
-                    else:
-                        # 信息提示框
-                        QMessageBox.information(self, "提示", "传入的文件路径不存在！")
-                        break
-                # self.update_file_count()
-            else:
-                # 信息提示框
-                QMessageBox.information(
-                    self, "提示", "传入的路径不是有效的文件夹字符串或文件完整路径列表"
-                )
-
 
     def format_file_size(self, size_bytes):
         """格式化文件大小"""
@@ -598,9 +1044,6 @@ class FileOrganizer(QWidget):
                     )
                     rename_data.append((folder_path, original_name, new_name))
 
-    def toggle_replace(self, state):
-        self.replace_line_edit.setVisible(state == Qt.Checked)
-
     def rename_files(self):
         prefix = self.line_edit.currentText()
         replace_text = (
@@ -665,7 +1108,7 @@ class FileOrganizer(QWidget):
             QMessageBox.information(self, "提示", "重命名失败,请检查报错信息")
             print(f"Error renaming files: {e}")
         finally:
-            self.refresh_file_lists()
+            pass
 
     def generate_new_name(
         self,
@@ -717,10 +1160,6 @@ class FileOrganizer(QWidget):
         except Exception as e:
             print(f"Error renaming {os.path.basename(original_path)}: {e}")
 
-    def refresh_file_lists(self):
-        # 重新填充左侧列表
-        if current_folder := self.folder_input.text():
-            self.set_folder_path(current_folder)
 
     def preview_rename(self):
         rename_data = []
@@ -793,6 +1232,49 @@ class FileOrganizer(QWidget):
         if filename.endswith(".png") and not self.jpg_checkbox.isChecked():
             return False
         return True
+
+    def open_power_rename(self):
+        """打开PowerRename窗口"""
+        # 获取右侧可见的文件列表
+        visible_files = self.get_visible_files()
+        
+        if not visible_files:
+            QMessageBox.information(self, "提示", "右侧没有可重命名的文件")
+            return
+            
+        # 打开PowerRename窗口
+        self.power_rename_window = PowerRenameDialog(visible_files, self)
+        self.power_rename_window.setWindowFlags(Qt.Window)
+        self.power_rename_window.show()
+        
+        # 连接窗口关闭信号
+        self.power_rename_window.window_closed.connect(self.on_power_rename_closed)
+        
+    def on_power_rename_closed(self):
+        """PowerRename窗口关闭时的处理"""
+        self.imagesRenamed.emit()  # 发送信号，通知刷新图片列表
+            
+    def get_visible_files(self):
+        """获取右侧可见的文件列表"""
+        visible_files = []
+        root_index = self.right_tree.rootIndex()
+        if not root_index.isValid():
+            return visible_files
+            
+        def collect_files(proxy_index):
+            rows = self.right_proxy.rowCount(proxy_index)
+            for i in range(rows):
+                child_proxy = self.right_proxy.index(i, 0, proxy_index)
+                source_idx = self.right_proxy.mapToSource(child_proxy)
+                if self.right_model.isDir(source_idx):
+                    collect_files(child_proxy)
+                else:
+                    file_path = self.right_model.filePath(source_idx)
+                    if os.path.isfile(file_path):
+                        visible_files.append(file_path)
+                        
+        collect_files(root_index)
+        return visible_files
 
     def show_help(self):
         help_text = (
@@ -900,13 +1382,11 @@ class FileOrganizer(QWidget):
             file_path = self.left_model.filePath(index)
             if os.path.isdir(file_path):
                 # 更新文件夹输入框，仅更新统计，不自动添加到右侧
-                self.folder_input.setText(file_path)
                 self.update_folder_count_for_path(file_path)
             else:
                 # 如果选择的是文件，仅更新输入框为其父目录
                 parent_dir = os.path.dirname(file_path)
                 if os.path.isdir(parent_dir):
-                    self.folder_input.setText(parent_dir)
                     self.update_folder_count_for_path(parent_dir)
 
     def update_folder_count_for_path(self, folder_path):
@@ -927,13 +1407,6 @@ class FileOrganizer(QWidget):
         # folder_name = os.path.basename(folder_path) or folder_path
         # self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
 
-    def on_folder_input_enter(self):
-        folder = self.folder_input.text()
-        if os.path.isdir(folder):
-            self.set_folder_path(folder)
-            self.settings.setValue("lastFolder", folder)
-        else:
-            print("输入的路径不是有效的文件夹")
 
 
 if __name__ == "__main__":
