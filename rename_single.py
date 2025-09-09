@@ -845,6 +845,49 @@ class FileOrganizer(QWidget):
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
         self.setWindowIcon(QIcon(icon_path))
 
+    def log(self, message):
+        try:
+            print(f"[FileOrganizer] {message}")
+        except Exception:
+            pass
+
+    def _get_app_base_dir(self):
+        """返回应用运行目录（支持打包为 exe 的情况）。"""
+        candidates = []
+        try:
+            exe_path = getattr(sys, 'executable', '') or ''
+            if exe_path and os.path.exists(exe_path):
+                exe_dir = os.path.normcase(os.path.abspath(os.path.dirname(exe_path)))
+                candidates.append(exe_dir)
+                # 兼容 Nuitka/pyinstaller dist 目录
+                candidates.append(os.path.normcase(os.path.abspath(os.path.dirname(exe_dir))))
+        except Exception:
+            pass
+        try:
+            file_dir = os.path.normcase(os.path.abspath(os.path.dirname(__file__)))
+            candidates.append(file_dir)
+            candidates.append(os.path.normcase(os.path.abspath(os.path.dirname(file_dir))))
+        except Exception:
+            pass
+        try:
+            cwd_dir = os.path.normcase(os.path.abspath(os.getcwd()))
+            candidates.append(cwd_dir)
+            candidates.append(os.path.normcase(os.path.abspath(os.path.dirname(cwd_dir))))
+        except Exception:
+            pass
+        # 去重并返回集合字符串（用于匹配）
+        uniq = []
+        seen = set()
+        for d in candidates:
+            if d and d not in seen:
+                seen.add(d)
+                uniq.append(d)
+        try:
+            print(f"[_get_app_base_dir] candidates: {uniq}")
+        except Exception:
+            pass
+        return uniq
+
     def initUI(self):
         # 设置窗口初始大小
         self.resize(1200, 800)
@@ -906,6 +949,10 @@ class FileOrganizer(QWidget):
             self._empty_dir = _tmp.mkdtemp(prefix="rename_empty_")
             empty_index = self.right_proxy.mapFromSource(self.right_model.index(self._empty_dir))
             self.right_tree.setRootIndex(empty_index)
+            try:
+                print(f"[Startup] right_tree set to empty dir: {self._empty_dir}")
+            except Exception:
+                pass
         except Exception:
             self.right_tree.setRootIndex(QModelIndex())
         self.right_tree.setSelectionMode(QTreeView.ExtendedSelection)
@@ -1046,9 +1093,15 @@ class FileOrganizer(QWidget):
         self.setLayout(main_layout)
         self.setWindowTitle("重命名")
 
-        # 加载上次打开的文件夹
-        if last_folder := self.settings.value("lastFolder", ""):
-            self.set_folder_path(last_folder)
+        # 是否在启动时恢复上次文件夹（默认不恢复，避免固定打开某目录）
+        self.restore_on_startup = bool(self.settings.value("restoreOnStartup", False, type=bool))
+        if self.restore_on_startup:
+            last_folder = self.settings.value("lastFolder", "")
+            self.log(f"startup restore enabled, lastFolder='{last_folder}'")
+            if last_folder:
+                self.set_folder_path(last_folder)
+        else:
+            self.log("startup restore disabled; no folder auto-opened")
 
         # 添加ESC键退出快捷键
         self.shortcut_esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
@@ -1067,7 +1120,7 @@ class FileOrganizer(QWidget):
             except Exception as e:
                 print(f"Ctrl+M trigger error: {e}")
         self.shortcut_powerrename.activated.connect(_hotkey_trigger)
-
+        # self.show()
         # 初始化系统托盘
         self.setup_tray_icon()
         # 全局热键（Ctrl+M）
@@ -1513,15 +1566,19 @@ class FileOrganizer(QWidget):
                 active_hwnd = ctypes.windll.user32.GetForegroundWindow()
             except Exception:
                 active_hwnd = 0
-            # 优先匹配活动窗口
+            # 仅匹配 Explorer 窗口，并优先活动窗口
             candidates = []
             for w in windows:
                 try:
+                    fullname = str(getattr(w, 'FullName', '')).lower()
+                    if not fullname.endswith('explorer.exe'):
+                        continue
                     hwnd = getattr(w, 'HWND', 0)
                     candidates.append((hwnd, w))
                 except Exception:
                     continue
             candidates.sort(key=lambda t: 0 if t[0] == active_hwnd else 1)
+            app_base_dirs = self._get_app_base_dir()
             for hwnd, w in candidates:
                 try:
                     doc = getattr(w, 'Document', None)
@@ -1536,7 +1593,48 @@ class FileOrganizer(QWidget):
                         p = getattr(it, 'Path', None)
                         if isinstance(p, str) and os.path.exists(p):
                             paths.append(p)
+                    # 过滤掉本程序目录（如 Nuitka/pyinstaller 打包目录以及其父目录）
                     if paths:
+                        normed = [os.path.normcase(os.path.abspath(x)) for x in paths]
+                        def _is_under_any_app_dir(p):
+                            for base in (app_base_dirs or []):
+                                try:
+                                    if p == base or p.startswith(base + os.sep):
+                                        return True
+                                except Exception:
+                                    continue
+                            # 额外：过滤掉以 .dist/.onefile-temp 结尾的目录
+                            if p.endswith('.dist') or p.endswith('.onefile-temp'):
+                                return True
+                            return False
+                        filtered = [p for p in normed if not _is_under_any_app_dir(p)]
+                        if len(filtered) != len(normed):
+                            try:
+                                print(f"[_get_explorer_selected_paths] filtered {len(normed) - len(filtered)} app-dir items, hwnd={hwnd}")
+                            except Exception:
+                                pass
+                        # 如果全被过滤，跳过该窗口
+                        if not filtered:
+                            try:
+                                print(f"[_get_explorer_selected_paths] skip window, all items under app dirs")
+                            except Exception:
+                                pass
+                            continue
+                        # 将过滤后的原始大小写路径映射回去（以原值为准）
+                        original_keep = []
+                        for x in paths:
+                            try:
+                                n = os.path.normcase(os.path.abspath(x))
+                            except Exception:
+                                n = x
+                            if n in filtered:
+                                original_keep.append(x)
+                        paths = original_keep
+                    if paths:
+                        try:
+                            print(f"[_get_explorer_selected_paths] use explorer hwnd={hwnd}, items={len(paths)}")
+                        except Exception:
+                            pass
                         return paths
                 except Exception:
                     continue
@@ -1550,6 +1648,10 @@ class FileOrganizer(QWidget):
             paths = self._get_explorer_selected_paths()
             files = []
             if paths:
+                try:
+                    print(f"[Ctrl+M] explorer selected paths: {len(paths)}")
+                except Exception:
+                    pass
                 files = self._collect_files_recursive(paths)
                 # 同步把资源管理器选择应用到主程序右侧视图
                 self._apply_paths_to_right(paths)
@@ -1558,15 +1660,27 @@ class FileOrganizer(QWidget):
                 selected = [idx for idx in self.left_tree.selectedIndexes() if idx.column() == 0]
                 if selected:
                     left_paths = [self.left_model.filePath(idx) for idx in selected]
+                    try:
+                        print(f"[Ctrl+M] fallback left selection count: {len(left_paths)}")
+                    except Exception:
+                        pass
                     files = self._collect_files_recursive(left_paths)
                     self._apply_paths_to_right(left_paths)
             if not files:
                 # 再回退：右侧可见
                 files = self.get_visible_files()
+                try:
+                    print(f"[Ctrl+M] fallback visible files count: {len(files)}")
+                except Exception:
+                    pass
             if not files:
                 QMessageBox.information(self, "提示", "没有可重命名的文件")
                 return
             files = sorted(list(dict.fromkeys(files)), key=self._natural_sort_key)
+            try:
+                print(f"[Ctrl+M] final files count opened in PowerRename: {len(files)}")
+            except Exception:
+                pass
             self.power_rename_window = PowerRenameDialog(files, None)
             self.power_rename_window.setWindowFlags(Qt.Window)
             self.power_rename_window.show()
@@ -1752,6 +1866,10 @@ class FileOrganizer(QWidget):
     def set_folder_path(self, folder_path):
         """设置文件夹路径到文件模型"""
         if os.path.isdir(folder_path):
+            try:
+                print(f"[set_folder_path] set: {folder_path}")
+            except Exception:
+                pass
             # 不再限制根路径，显示完整的文件系统结构
             # 自动展开到指定路径
             self.expand_to_path(folder_path)
@@ -1824,6 +1942,10 @@ class FileOrganizer(QWidget):
                 return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
             roots = [os.path.dirname(p) if os.path.isfile(p) else p for p in include]
             root_dir = _common_parent(roots) or (roots[0] if roots else "")
+            try:
+                print(f"[_apply_paths_to_right] include={len(include)}, root={root_dir}")
+            except Exception:
+                pass
             # 应用到右侧代理
             self._right_excluded_paths = []
             self.right_proxy.clear_excluded()
