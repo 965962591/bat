@@ -2439,7 +2439,8 @@ class FileDownloadDialog(QDialog):
         subfolder_label = QLabel("子文件夹命名:")
         self.subfolder_combo = QComboBox()
         self.subfolder_combo.addItems(["年\\日", "年\\月\\日", "年\\月\\日\\时", "年\\月\\日\\时分", "年\\月\\日\\时分秒"])
-        self.subfolder_combo.setCurrentText("年\\月\\日\\时分秒")
+        # self.subfolder_combo.setCurrentText("年\\月\\日\\时分秒")
+        self.subfolder_combo.setCurrentIndex(1)
         
         # 根据选择的子文件夹格式动态显示示例
         self.subfolder_example = QLabel()
@@ -2465,13 +2466,33 @@ class FileDownloadDialog(QDialog):
         update_subfolder_example()
         subfolder_example = self.subfolder_example
         subfolder_example.setStyleSheet("color: #7f8c8d; font-size: 12px;")
-          
-        # 取消下拉默认选项，改为纯文本输入
+        
+        # 自定义输入框（改为可编辑下拉列表）
+        custom_label = QLabel("自定义名称:")
+        self.custom_subfolder_input = QComboBox()
+        self.custom_subfolder_input.setEditable(True)  # 允许用户输入
+        self.custom_subfolder_input.setPlaceholderText("留空使用日期格式，请输入自定义文件名如:第一轮FT")
+        self.custom_subfolder_input.setToolTip("留空使用日期格式，请输入自定义文件名如:第一轮FT")
+        self.custom_subfolder_input.setMinimumWidth(500)  # 设置最小宽度确保文本显示完整
+        
+        # 添加默认选项
+        default_options = [
+            "自测",
+            "回归", 
+            "FT1",
+            "FT2",
+            "小数包",
+            "整数包"
+        ]
+        self.custom_subfolder_input.addItems(default_options)
+        self.custom_subfolder_input.setCurrentIndex(1)
         
         # 将所有控件添加到水平布局中
         subfolder_layout.addWidget(subfolder_label)
         subfolder_layout.addWidget(self.subfolder_combo)
         subfolder_layout.addWidget(subfolder_example)
+        subfolder_layout.addWidget(custom_label)
+        subfolder_layout.addWidget(self.custom_subfolder_input)
         subfolder_layout.addStretch()
         
         dest_layout.addLayout(subfolder_layout)
@@ -2932,6 +2953,7 @@ class FileDownloadDialog(QDialog):
             dest_path, 
             self.subfolder_combo.currentText(),
             self.device_name_mapping,  # 传递设备名称映射
+            self.custom_subfolder_input.currentText().strip()  # 传递自定义子文件夹名称
         )
         self.download_thread.download_finished.connect(self.download_finished)
         self.download_thread.folder_not_found.connect(self.handle_folder_not_found)  # 连接新信号
@@ -3211,19 +3233,19 @@ class DownloadThread(QThread):
                 else:
                     source_path = f"/sdcard/{folder_path}"
                 
-                # 目标目录: <dest>/<timestamp>/<custom_name>/<device_display_name>
-                # 先按自定义名称分组，再按设备创建子文件夹
-                custom_folder = os.path.join(timestamp_folder, custom_name)
-                device_folder = os.path.join(custom_folder, device_display_name)
+                # 目标目录: <dest>/<timestamp>/<device_display_name>/<custom_name>
+                # 先按设备分组，再按自定义名称创建子文件夹
+                device_folder = os.path.join(timestamp_folder, custom_name)
+                custom_folder = os.path.join(device_folder, device_display_name)
                 try:
-                    os.makedirs(device_folder, exist_ok=True)
+                    os.makedirs(custom_folder, exist_ok=True)
                 except Exception as e:
-                    self.progress_updated.emit(f"无法创建文件夹 '{device_folder}': {str(e)}")
+                    self.progress_updated.emit(f"无法创建文件夹 '{custom_folder}': {str(e)}")
                     failed_combinations.append(combination)
                     continue
                 
                 # 仅拉取目录内容，避免嵌套一层同名目录
-                result = self.execute_adb_pull(device_id, source_path, device_folder, folder_path)
+                result = self.execute_adb_pull(device_id, source_path, custom_folder, folder_path)
                 
                 if result:
                     self.progress_updated.emit(f"✓ 设备 {device_display_name} 文件夹 {custom_name} 下载成功")
@@ -3250,23 +3272,28 @@ class DownloadThread(QThread):
 
     def format_timestamp(self, timestamp):
         """格式化时间戳"""
+        # 获取时间戳格式，拼接传入的自定义名称
+        timesramp_str = ""
+        if "年\\月\\日\\时分秒" in self.subfolder_format:
+            timesramp_str = timestamp.strftime("%Y-%m-%d-%H-%M-%S")
+        elif "年\\月\\日\\时分" in self.subfolder_format:
+            timesramp_str = timestamp.strftime("%Y-%m-%d-%H-%M")
+        elif "年\\月\\日\\时" in self.subfolder_format:
+            timesramp_str = timestamp.strftime("%Y-%m-%d-%H")
+        elif "年\\月\\日" in self.subfolder_format:
+            timesramp_str = timestamp.strftime("%Y-%m-%d")
+        elif "年\\日" in self.subfolder_format:
+            timesramp_str = timestamp.strftime("%Y-%m-%d")
+        else:
+            timesramp_str = timestamp.strftime("%Y-%m-%d")
+
         # 如果用户输入了自定义名称，直接使用自定义名称
         if self.custom_subfolder_name and self.custom_subfolder_name.strip():
-            return self.custom_subfolder_name.strip()
+            timesramp_str += self.custom_subfolder_name.strip()
+
+        return timesramp_str
         
-        # 否则按照优先级判断，从最具体的开始
-        if "年\\月\\日\\时分秒" in self.subfolder_format:
-            return timestamp.strftime("%Y-%m-%d-%H-%M-%S")
-        elif "年\\月\\日\\时分" in self.subfolder_format:
-            return timestamp.strftime("%Y-%m-%d-%H-%M")
-        elif "年\\月\\日\\时" in self.subfolder_format:
-            return timestamp.strftime("%Y-%m-%d-%H")
-        elif "年\\月\\日" in self.subfolder_format:
-            return timestamp.strftime("%Y-%m-%d")
-        elif "年\\日" in self.subfolder_format:
-            return timestamp.strftime("%Y-%m-%d")
-        else:
-            return timestamp.strftime("%Y-%m-%d")
+
     
     def execute_adb_pull(self, device, source_path, dest_path, folder_name):
         """执行adb pull命令并实时显示进度"""
