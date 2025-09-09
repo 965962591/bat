@@ -339,8 +339,9 @@ class PowerRenameDialog(QWidget):
             else:
                 new_name = original_name
             
-            # 无论文件名是否相同，都添加到预览数据中
-            self.preview_data.append((folder_path, original_name, new_name))
+            # 只添加需要重命名的文件到预览数据中
+            if new_name != original_name:
+                self.preview_data.append((folder_path, original_name, new_name))
         
         self.update_preview_table()
         
@@ -474,9 +475,11 @@ class PowerRenameDialog(QWidget):
             self.preview_table.setItem(row, 0, QTableWidgetItem(old_name))
             self.preview_table.setItem(row, 1, QTableWidgetItem(new_name))
         
-        # 更新标题
-        self.original_label.setText(f"原始 ({len(self.preview_data)})")
-        self.renamed_label.setText(f"已重命名 ({len(self.preview_data)})")
+        # 更新标题 - 显示总文件数和需要重命名的文件数
+        total_files = len(self.file_list)
+        rename_files = len(self.preview_data)
+        self.original_label.setText(f"原始 ({total_files})")
+        self.renamed_label.setText(f"已重命名 ({rename_files})")
         
     def apply_rename(self):
         """应用重命名"""
