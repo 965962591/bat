@@ -78,7 +78,7 @@ bat/
 
 ### 系统要求
 - Windows 10/11
-- Python 3.7+
+- Python 3.12+
 - ADB (Android Debug Bridge)
 
 ### Python 依赖
@@ -210,6 +210,6 @@ pyinstaller -w bat.py
 
 ---
 
-**版本**: 3.8.3  
-**最后更新**: 2024年  
+**版本**: 3.8.3.0  
+**最后更新**: 2025年  
 **维护者**: BarryChen
