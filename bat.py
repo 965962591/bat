@@ -3135,8 +3135,7 @@ class FileDownloadDialog(QDialog):
             
             # 启动FileOrganizer重命名工具，并传入目标路径
             self.file_organizer = FileOrganizer()
-            # 设置文件夹路径
-            self.file_organizer.folder_input.setText(target_path)
+            # 设置文件夹路径（不再需要folder_input，直接使用set_folder_path）
             self.file_organizer.set_folder_path(target_path)
             self.file_organizer.show()
             print(f"已启动文件重命名工具，路径: {target_path}")

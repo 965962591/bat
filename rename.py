@@ -1069,15 +1069,6 @@ class FileOrganizer(QWidget):
             self.right_proxy.invalidate()
             # self.update_file_count()
 
-    def add_all_to_right(self):
-        root_path = self.folder_input.text()
-        if os.path.isdir(root_path):
-            # 设置右侧模型的根路径为当前选择的文件夹
-            self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(root_path)))
-            # 显示整个文件夹（清除仅包含过滤）
-            if hasattr(self, 'right_proxy'):
-                self.right_proxy.clear_included()
-        # self.update_file_count()
 
     def remove_from_right(self):
         # 只移除右侧选中的条目（通过过滤器隐藏选中的路径）
@@ -1215,8 +1206,8 @@ class FileOrganizer(QWidget):
         prefix = self.line_edit.currentText()
         replace_text = (
             self.replace_line_edit.currentText()
-            if self.replace_checkbox.isChecked()
-            else None
+            # if self.replace_checkbox.isChecked()
+            # else None
         )
         hash_count = prefix.count("#")
         try:
@@ -1333,8 +1324,8 @@ class FileOrganizer(QWidget):
         prefix = self.line_edit.currentText()
         replace_text = (
             self.replace_line_edit.currentText()
-            if self.replace_checkbox.isChecked()
-            else None
+            # if self.replace_checkbox.isChecked()
+            # else None
         )
 
         hash_count = prefix.count("#")
