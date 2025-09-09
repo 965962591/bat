@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QFrame,
     QScrollArea,
+    QStatusBar,
 )
 from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex
 from PyQt5.QtGui import QKeySequence, QIcon, QFont
@@ -903,7 +904,7 @@ class FileOrganizer(QWidget):
         # right_layout.addWidget(self.file_count_label)
         right_layout.addWidget(self.right_tree)
 
-        # 右侧下方布局
+        # 右侧下方布局（已不再直接显示在右侧，而是移到状态栏）
         right_bottom_layout = QHBoxLayout()
 
         # 输入框
@@ -938,34 +939,17 @@ class FileOrganizer(QWidget):
         self.power_rename_button = QPushButton("PowerRename", self)
         self.power_rename_button.clicked.connect(self.open_power_rename)
 
+        # 这些控件将被添加到状态栏右侧
         right_bottom_layout.addWidget(self.line_edit)
         right_bottom_layout.addWidget(self.replace_line_edit)
-
         right_bottom_layout.addWidget(self.start_button)
         right_bottom_layout.addWidget(self.preview_button)
-        right_bottom_layout.addWidget(self.power_rename_button)  # 添加PowerRename按钮
-        right_bottom_layout.addWidget(self.help_button)  # 添加帮助按钮
+        right_bottom_layout.addWidget(self.power_rename_button)
+        right_bottom_layout.addWidget(self.help_button)
 
-        # 在这里增加可伸缩的空间
-        right_bottom_layout.addStretch(0)
+        # 移除文件类型复选框（jpg/txt/xml），不再做扩展名筛选
 
-        # 添加文件类型复选框
-        self.jpg_checkbox = QCheckBox("jpg", self)
-        self.txt_checkbox = QCheckBox("txt", self)
-        self.xml_checkbox = QCheckBox("xml", self)
-
-        # 默认选中所有复选框
-        self.jpg_checkbox.setChecked(True)
-        self.txt_checkbox.setChecked(True)
-        self.xml_checkbox.setChecked(True)
-
-        # 将复选框添加到布局
-        right_bottom_layout.addWidget(self.jpg_checkbox)
-        right_bottom_layout.addWidget(self.txt_checkbox)
-        right_bottom_layout.addWidget(self.xml_checkbox)
-
-        # 将右侧底部布局添加到右侧布局
-        right_layout.addLayout(right_bottom_layout)
+        # 不再将底部布局添加到右侧布局，改为使用状态栏承载
 
         # 中间按钮组件布局
         middle_button_layout = QVBoxLayout()
@@ -985,15 +969,58 @@ class FileOrganizer(QWidget):
         middle_button_layout.addWidget(self.remove_button)
         # middle_button_layout.addWidget(self.remove_all_button)  # 添加"移除全部"按钮
 
-        # 新建列表布局，添加左侧布局、中间按钮组件布局、右侧布局
-        list_layout = QHBoxLayout()
-        list_layout.addLayout(left_layout)
-        list_layout.addLayout(middle_button_layout)
-        list_layout.addLayout(right_layout)
+        # 将左侧(含中间按钮)与右侧分别打包为两个容器，使用分隔条可调整大小
+        left_container = QFrame()
+        left_container.setFrameStyle(QFrame.NoFrame)
+        left_container_layout = QHBoxLayout()
+        left_container_layout.setContentsMargins(0, 0, 0, 0)
+        left_container_layout.setSpacing(0)
+        left_container_layout.addLayout(left_layout)
+        left_container_layout.addLayout(middle_button_layout)
+        left_container.setLayout(left_container_layout)
+
+        right_container = QFrame()
+        right_container.setFrameStyle(QFrame.NoFrame)
+        right_container_layout = QVBoxLayout()
+        right_container_layout.setContentsMargins(0, 0, 0, 0)
+        right_container_layout.setSpacing(0)
+        right_container_layout.addLayout(right_layout)
+        right_container.setLayout(right_container_layout)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_container)
+        splitter.addWidget(right_container)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        # 设置伸缩因子为 1:1
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        # 按当前窗口宽度初始化尺寸为 1:1
+        try:
+            total_w = max(self.width(), 1)
+            left_w = int(total_w * 1 / 2)
+            right_w = max(total_w - left_w, 1)
+            splitter.setSizes([left_w, right_w])
+        except Exception:
+            splitter.setSizes([400, 600])
 
         # 整个界面主体布局设置，添加文件夹选择布局、列表布局，上下分布
         main_layout.addLayout(folder_layout)
-        main_layout.addLayout(list_layout)
+        main_layout.addWidget(splitter)
+
+        # 添加状态栏并将控件右对齐显示
+        self.status_bar = QStatusBar(self)
+        self.status_bar.setSizeGripEnabled(False)
+        # 固定状态栏高度
+        self.status_bar.setFixedHeight(40)
+        # 将控件作为永久部件添加（自动靠右对齐）
+        self.status_bar.addPermanentWidget(self.line_edit)
+        self.status_bar.addPermanentWidget(self.replace_line_edit)
+        self.status_bar.addPermanentWidget(self.start_button)
+        self.status_bar.addPermanentWidget(self.preview_button)
+        self.status_bar.addPermanentWidget(self.power_rename_button)
+        self.status_bar.addPermanentWidget(self.help_button)
+        main_layout.addWidget(self.status_bar)
 
         self.setLayout(main_layout)
         self.setWindowTitle("重命名")
@@ -1392,17 +1419,7 @@ class FileOrganizer(QWidget):
             print("没有可预览的重命名数据")
 
     def should_rename_file(self, filename):
-        # 获取文件的存储的子文件夹名称
-        # 这里假设 filename 中不包含路径信息
-        # 如果需要，可以调整为接收额外的参数
-        if filename.endswith(".jpg") and not self.jpg_checkbox.isChecked():
-            return False
-        if filename.endswith(".txt") and not self.txt_checkbox.isChecked():
-            return False
-        if filename.endswith(".xml") and not self.xml_checkbox.isChecked():
-            return False
-        if filename.endswith(".png") and not self.jpg_checkbox.isChecked():
-            return False
+        # 不再根据扩展名筛选，全部参与重命名
         return True
 
     def open_power_rename(self):
