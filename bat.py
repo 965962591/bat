@@ -2465,32 +2465,13 @@ class FileDownloadDialog(QDialog):
         update_subfolder_example()
         subfolder_example = self.subfolder_example
         subfolder_example.setStyleSheet("color: #7f8c8d; font-size: 12px;")
-        
-        # 自定义输入框（改为可编辑下拉列表）
-        custom_label = QLabel("自定义名称:")
-        self.custom_subfolder_input = QComboBox()
-        self.custom_subfolder_input.setEditable(True)  # 允许用户输入
-        self.custom_subfolder_input.setPlaceholderText("留空使用日期格式，请输入自定义文件名如:第一轮FT")
-        self.custom_subfolder_input.setToolTip("留空使用日期格式，请输入自定义文件名如:第一轮FT")
-        self.custom_subfolder_input.setMinimumWidth(500)  # 设置最小宽度确保文本显示完整
-        
-        # 添加默认选项
-        default_options = [
-            "第一轮FT",
-            "第二轮FT", 
-            "第三轮FT",
-            "第四轮FT",
-            "第五轮FT",
-            "回归测试"
-        ]
-        self.custom_subfolder_input.addItems(default_options)
+          
+        # 取消下拉默认选项，改为纯文本输入
         
         # 将所有控件添加到水平布局中
         subfolder_layout.addWidget(subfolder_label)
         subfolder_layout.addWidget(self.subfolder_combo)
         subfolder_layout.addWidget(subfolder_example)
-        subfolder_layout.addWidget(custom_label)
-        subfolder_layout.addWidget(self.custom_subfolder_input)
         subfolder_layout.addStretch()
         
         dest_layout.addLayout(subfolder_layout)
@@ -2951,7 +2932,6 @@ class FileDownloadDialog(QDialog):
             dest_path, 
             self.subfolder_combo.currentText(),
             self.device_name_mapping,  # 传递设备名称映射
-            self.custom_subfolder_input.currentText().strip()  # 传递自定义子文件夹名称
         )
         self.download_thread.download_finished.connect(self.download_finished)
         self.download_thread.folder_not_found.connect(self.handle_folder_not_found)  # 连接新信号
