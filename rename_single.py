@@ -160,8 +160,8 @@ class PowerRenameDialog(QWidget):
             return [name.lower()]
 
     def initUI(self):
-        self.setWindowTitle("PowerRename - 查找替换")
-        self.resize(1000, 700)
+        self.setWindowTitle("PowerRename")
+        self.resize(1200, 700)
         self.setMinimumSize(800, 600)
         
         # 设置图标
@@ -1068,12 +1068,15 @@ class FileOrganizer(QWidget):
                 print(f"Ctrl+M trigger error: {e}")
         self.shortcut_powerrename.activated.connect(_hotkey_trigger)
 
-        self.show()
-
         # 初始化系统托盘
         self.setup_tray_icon()
         # 全局热键（Ctrl+M）
         self.setup_global_hotkey()
+        # 启动时默认驻留托盘，不显示主窗口，避免闪烁
+        try:
+            self.hide()
+        except Exception:
+            pass
         # 启动时仅驻托盘，不显示主窗口
         self.hide()
 
@@ -1548,12 +1551,15 @@ class FileOrganizer(QWidget):
             files = []
             if paths:
                 files = self._collect_files_recursive(paths)
+                # 同步把资源管理器选择应用到主程序右侧视图
+                self._apply_paths_to_right(paths)
             if not files:
                 # 回退：左侧选择
                 selected = [idx for idx in self.left_tree.selectedIndexes() if idx.column() == 0]
                 if selected:
                     left_paths = [self.left_model.filePath(idx) for idx in selected]
                     files = self._collect_files_recursive(left_paths)
+                    self._apply_paths_to_right(left_paths)
             if not files:
                 # 再回退：右侧可见
                 files = self.get_visible_files()
@@ -1790,6 +1796,45 @@ class FileOrganizer(QWidget):
         except Exception as e:
             print(f"open_powerrename_for_path error: {e}")
 
+    def _apply_paths_to_right(self, paths):
+        """将多个路径应用到右侧视图：设置白名单并定位到共同父目录。"""
+        try:
+            if not paths:
+                return
+            norm_paths = [os.path.normpath(p) for p in paths if p]
+            include = set()
+            for p in norm_paths:
+                if os.path.exists(p):
+                    include.add(p)
+            if not include:
+                return
+            # 计算共同父目录
+            def _common_parent(dir_list):
+                parts = [os.path.abspath(d).split(os.sep) for d in dir_list]
+                if not parts:
+                    return None
+                min_len = min(len(x) for x in parts)
+                prefix = []
+                for i in range(min_len):
+                    token = parts[0][i]
+                    if all(x[i] == token for x in parts):
+                        prefix.append(token)
+                    else:
+                        break
+                return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
+            roots = [os.path.dirname(p) if os.path.isfile(p) else p for p in include]
+            root_dir = _common_parent(roots) or (roots[0] if roots else "")
+            # 应用到右侧代理
+            self._right_excluded_paths = []
+            self.right_proxy.clear_excluded()
+            self.right_proxy.set_hide_all(False)
+            self.right_proxy.set_included(include)
+            if root_dir:
+                self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(root_dir)))
+            self.right_proxy.invalidate()
+        except Exception as e:
+            print(f"_apply_paths_to_right error: {e}")
+
     def on_left_tree_selection_changed(self, selected, deselected):
         """处理左侧文件树选择变化"""
         indexes = selected.indexes()
@@ -1858,32 +1903,23 @@ class FileOrganizer(QWidget):
         QApplication.quit()
 
     def closeEvent(self, event):
-        """关闭窗口时提示是否最小化到托盘"""
+        """关闭时直接最小化到托盘并弹出气泡提示"""
         if self.tray_icon and QSystemTrayIcon.isSystemTrayAvailable():
-            reply = QMessageBox.question(
-                self,
-                "退出确认",
-                "要退出程序还是最小化到系统托盘?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            # Yes=退出, No=最小化
-            if reply == QMessageBox.No:
-                event.ignore()
-                self.hide()
-                # 显示一次气泡提示
+            event.ignore()
+            self.hide()
+            try:
                 if not self._balloon_shown:
-                    try:
-                        self.tray_icon.showMessage(
-                            "仍在运行",
-                            "程序已最小化到系统托盘，双击托盘图标可恢复窗口。",
-                            QSystemTrayIcon.Information,
-                            3000,
-                        )
-                        self._balloon_shown = True
-                    except Exception:
-                        pass
-                return
+                    self.tray_icon.showMessage(
+                        "仍在运行",
+                        "程序已最小化到系统托盘，双击托盘图标可恢复窗口。",
+                        QSystemTrayIcon.Information,
+                        3000,
+                    )
+                    self._balloon_shown = True
+            except Exception:
+                pass
+            return
+        # 无托盘环境，按默认关闭
         try:
             self.unregister_global_hotkey()
         except Exception:
@@ -1948,4 +1984,9 @@ if __name__ == "__main__":
     except Exception:
         pass
     ex = FileOrganizer()
+    # 程序启动即驻留托盘，不显示主窗口
+    try:
+        ex.hide()
+    except Exception:
+        pass
     sys.exit(app.exec_())
