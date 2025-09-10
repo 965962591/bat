@@ -354,6 +354,9 @@ class PowerRenameDialog(QWidget):
         self.preview_table.setColumnCount(3)
         self.preview_table.setHorizontalHeaderLabels(["", "原始文件名", "重命名后"])
         
+        # 隐藏行号索引
+        self.preview_table.verticalHeader().hide()
+        
         # 设置表格属性
         header = self.preview_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)  # 复选框列固定宽度
@@ -2205,6 +2208,15 @@ class FileOrganizer(QWidget):
             return
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
         tray_icon = QSystemTrayIcon(QIcon(icon_path), self)
+        
+        # 设置托盘提示信息
+        tooltip_text = (
+            "Ctrl+M - 打开PowerRename窗口\n"
+            "Ctrl+N - 打开主窗口\n"
+            "#数字, $p文件夹名, $$p两级文件夹"
+        )
+        tray_icon.setToolTip(tooltip_text)
+        
         menu = QMenu()
         action_show = QAction("显示窗口", self)
         action_exit = QAction("退出", self)
