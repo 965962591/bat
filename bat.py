@@ -39,7 +39,7 @@ import configparser
 from datetime import datetime
 
 from qt_material import apply_stylesheet
-from rename import FileOrganizer
+# from rename import FileOrganizer
 # 全局变量定义缓存目录
 APP_CACHE_DIR = os.path.join(os.path.dirname(__file__), "app_cache")
 
