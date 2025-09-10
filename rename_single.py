@@ -48,7 +48,7 @@ from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex, QAbstract
 from PyQt5.QtGui import QKeySequence, QIcon, QFont
 from PyQt5.QtWidgets import QShortcut, QFileSystemModel
 from PyQt5.QtCore import QSortFilterProxyModel
-
+from qt_material import apply_stylesheet
 
 class ExcludeFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
@@ -231,7 +231,7 @@ class PowerRenameDialog(QWidget):
         replace_layout = QVBoxLayout()
         
         self.replace_input = QLineEdit()
-        self.replace_input.setPlaceholderText("输入替换文本")
+        self.replace_input.setPlaceholderText("# 数字, $p 文件夹名, $$p两级文件夹")
         self.replace_input.textChanged.connect(self.update_preview)
         replace_layout.addWidget(self.replace_input)
         
@@ -380,30 +380,38 @@ class PowerRenameDialog(QWidget):
         # 始终显示所有原始文件，但根据查找/替换条件更新重命名预览
         self.preview_data = []
         
+        # 按文件夹分组文件，用于生成序号
+        from collections import defaultdict
+        folder_to_files = defaultdict(list)
         for file_path in sorted(self.file_list, key=self._natural_sort_key):
-            if not os.path.isfile(file_path):
-                continue
+            if os.path.isfile(file_path):
+                folder_path = os.path.dirname(file_path)
+                folder_to_files[folder_path].append(file_path)
+        
+        for folder_path, files in folder_to_files.items():
+            # 按文件夹内的文件顺序生成序号
+            for index, file_path in enumerate(files):
+                original_name = os.path.basename(file_path)
                 
-            original_name = os.path.basename(file_path)
-            folder_path = os.path.dirname(file_path)
-            
-            # 如果没有查找文本，重命名列为空
-            if not search_text:
-                self.preview_data.append((folder_path, original_name, original_name))
-                continue
-            
-            # 根据"应用于"复选框确定处理范围
-            if self.include_files_checkbox.isChecked():
-                # 处理文件名
-                name_part = os.path.splitext(original_name)[0]
-                ext_part = os.path.splitext(original_name)[1]
-                new_name_part = self.perform_replace(name_part, search_text, replace_text)
-                new_name = new_name_part + ext_part
-            else:
-                new_name = original_name
-            
-            # 添加所有文件到预览数据中，包括不修改的文件
-            self.preview_data.append((folder_path, original_name, new_name))
+                # 如果没有查找文本，重命名列为空
+                if not search_text:
+                    self.preview_data.append((folder_path, original_name, original_name))
+                    continue
+                
+                # 根据"应用于"复选框确定处理范围
+                if self.include_files_checkbox.isChecked():
+                    # 处理文件名
+                    name_part = os.path.splitext(original_name)[0]
+                    ext_part = os.path.splitext(original_name)[1]
+                    new_name_part = self.perform_replace_with_special_chars(
+                        name_part, search_text, replace_text, folder_path, index
+                    )
+                    new_name = new_name_part + ext_part
+                else:
+                    new_name = original_name
+                
+                # 添加所有文件到预览数据中，包括不修改的文件
+                self.preview_data.append((folder_path, original_name, new_name))
         
         self.update_preview_table()
         
@@ -490,6 +498,50 @@ class PowerRenameDialog(QWidget):
         
         # 应用文本格式到替换后的文本
         new_text = self.apply_text_format_to_result(new_text)
+        return new_text
+
+    def perform_replace_with_special_chars(self, text, search_text, replace_text, folder_path, index):
+        """执行带有特殊字符的替换操作"""
+        if not search_text:
+            return text
+            
+        # 首先进行普通的查找替换
+        new_text = self.perform_replace(text, search_text, replace_text)
+        
+        # 然后处理替换文本中的特殊字符
+        if replace_text:
+            # 获取文件夹信息
+            folder_name = os.path.basename(folder_path)
+            parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+            
+            # 处理 # 字符 - 数字序号
+            hash_count = replace_text.count("#")
+            if hash_count > 0:
+                # 计算连续 # 的数量
+                hash_groups = []
+                current_group = ""
+                for char in replace_text:
+                    if char == "#":
+                        current_group += "#"
+                    else:
+                        if current_group:
+                            hash_groups.append(current_group)
+                            current_group = ""
+                if current_group:
+                    hash_groups.append(current_group)
+                
+                # 替换每个 # 组
+                for hash_group in hash_groups:
+                    if hash_group:
+                        number_format = f"{{:0{len(hash_group)}d}}"
+                        formatted_number = number_format.format(index)
+                        new_text = new_text.replace(hash_group, formatted_number)
+            
+            # 处理 $p 和 $$p - 文件夹名
+            new_text = new_text.replace("$$p", f"{parent_folder_name}_{folder_name}")
+            new_text = new_text.replace("$$P", f"{parent_folder_name}_{folder_name}")
+            new_text = new_text.replace("$p", folder_name)
+        
         return new_text
         
     def apply_text_format_to_result(self, text):
@@ -2276,6 +2328,7 @@ class FileOrganizer(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    apply_stylesheet(app, theme='light_blue.xml', extra={'font_size': 16})
     # 关闭所有窗口时不退出，确保关闭 PowerRename 后程序仍常驻（托盘可用）
     try:
         app.setQuitOnLastWindowClosed(False)
