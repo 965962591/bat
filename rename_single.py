@@ -3,6 +3,7 @@ import os
 import tempfile
 import re
 import shlex
+import datetime
 try:
     import winreg
 except Exception:
@@ -517,28 +518,50 @@ class PowerRenameDialog(QWidget):
             folder_name = os.path.basename(folder_path)
             parent_folder_name = os.path.basename(os.path.dirname(folder_path))
             
-            # 处理 # 字符 - 数字序号
-            hash_count = replace_text.count("#")
-            if hash_count > 0:
-                # 计算连续 # 的数量
-                hash_groups = []
-                current_group = ""
-                for char in replace_text:
-                    if char == "#":
-                        current_group += "#"
-                    else:
-                        if current_group:
-                            hash_groups.append(current_group)
-                            current_group = ""
-                if current_group:
-                    hash_groups.append(current_group)
+            # 获取当前日期
+            now = datetime.datetime.now()
+            
+            # 处理日期格式
+            new_text = new_text.replace("$YYYY", str(now.year))  # 年，如 2025
+            new_text = new_text.replace("$MM", f"{now.month:02d}")  # 月，如 02
+            new_text = new_text.replace("$DD", f"{now.day:02d}")  # 日，如 02
+            new_text = new_text.replace("$yyyy", str(now.year))  # 年，如 2025
+            new_text = new_text.replace("$mm", f"{now.month:02d}")  # 月，如 02
+            new_text = new_text.replace("$dd", f"{now.day:02d}")  # 日，如 02
+            
+            # 处理 # 字符 - 数字序号（支持新的格式）
+            import re
+            
+            # 先处理带等号的格式，如 #=1, ##=1, ###=21
+            # 匹配 # 后跟 = 再跟数字的模式，如 #=1, ##=1, ###=21
+            hash_equals_number_pattern = r'#+=(\d+)'
+            matches = re.finditer(hash_equals_number_pattern, new_text)
+            
+            # 从后往前替换，避免位置偏移问题
+            for match in reversed(list(matches)):
+                full_match = match.group()
+                start_number = int(match.group(1))
+                # 计算 # 的数量：总长度 - = 的长度 - 数字的长度
+                hash_count = len(full_match) - 1 - len(match.group(1))
                 
-                # 替换每个 # 组
-                for hash_group in hash_groups:
-                    if hash_group:
-                        number_format = f"{{:0{len(hash_group)}d}}"
-                        formatted_number = number_format.format(index)
-                        new_text = new_text.replace(hash_group, formatted_number)
+                # 计算实际数字：index + start_number
+                actual_number = index + start_number
+                number_format = f"{{:0{hash_count}d}}"
+                formatted_number = number_format.format(actual_number)
+                
+                # 替换匹配的部分
+                new_text = new_text[:match.start()] + formatted_number + new_text[match.end():]
+            
+            # 处理纯 # 字符 - 数字序号（原有功能，不包含等号和数字的）
+            # 只处理不包含等号和数字的纯 # 序列
+            pure_hash_pattern = r'#+(?![=0-9])'
+            pure_matches = re.finditer(pure_hash_pattern, new_text)
+            
+            for match in reversed(list(pure_matches)):
+                hash_group = match.group()
+                number_format = f"{{:0{len(hash_group)}d}}"
+                formatted_number = number_format.format(index)
+                new_text = new_text[:match.start()] + formatted_number + new_text[match.end():]
             
             # 处理 $p 和 $$p - 文件夹名
             new_text = new_text.replace("$$p", f"{parent_folder_name}_{folder_name}")

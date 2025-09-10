@@ -20,6 +20,7 @@ if sys.platform == "win32":
         '--enable-plugin=pyqt5',
         '--windows-icon-from-ico=icon/rename.ico',
         '--windows-disable-console',
+        '--windows-uac-admin',
         '--output-dir=output',        
         'rename_single.py',
         '--windows-file-version=3.8.3.0',
