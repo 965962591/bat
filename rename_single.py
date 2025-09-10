@@ -839,6 +839,7 @@ class FileOrganizer(QWidget):
         self.tray_menu = None
         self._balloon_shown = False
         self._hotkey_filter = None
+        self.power_rename_window = None  # 添加PowerRename窗口实例管理
         self.initUI()
 
         # 设置图标路径
@@ -1528,6 +1529,15 @@ class FileOrganizer(QWidget):
         if not visible_files:
             QMessageBox.information(self, "提示", "右侧没有可重命名的文件")
             return
+        
+        # 检查是否已经存在PowerRename窗口
+        if self.power_rename_window is not None and not self.power_rename_window.isHidden():
+            # 如果窗口已存在且可见，只更新文件列表
+            self.power_rename_window.file_list = visible_files
+            self.power_rename_window.show_original_files()
+            self.power_rename_window.raise_()
+            self.power_rename_window.activateWindow()
+            return
             
         # 打开PowerRename窗口
         # 以无父窗口显示，避免带出主窗口
@@ -1681,6 +1691,17 @@ class FileOrganizer(QWidget):
                 print(f"[Ctrl+M] final files count opened in PowerRename: {len(files)}")
             except Exception:
                 pass
+            
+            # 检查是否已经存在PowerRename窗口
+            if self.power_rename_window is not None and not self.power_rename_window.isHidden():
+                # 如果窗口已存在且可见，只更新文件列表
+                self.power_rename_window.file_list = files
+                self.power_rename_window.show_original_files()
+                self.power_rename_window.raise_()
+                self.power_rename_window.activateWindow()
+                return
+            
+            # 创建新的PowerRename窗口
             self.power_rename_window = PowerRenameDialog(files, None)
             self.power_rename_window.setWindowFlags(Qt.Window)
             self.power_rename_window.show()
@@ -1711,6 +1732,16 @@ class FileOrganizer(QWidget):
                 return
             # 去重并自然排序
             files = sorted(list(dict.fromkeys(files)), key=self._natural_sort_key)
+            
+            # 检查是否已经存在PowerRename窗口
+            if self.power_rename_window is not None and not self.power_rename_window.isHidden():
+                # 如果窗口已存在且可见，只更新文件列表
+                self.power_rename_window.file_list = files
+                self.power_rename_window.show_original_files()
+                self.power_rename_window.raise_()
+                self.power_rename_window.activateWindow()
+                return
+            
             self.power_rename_window = PowerRenameDialog(files, self)
             self.power_rename_window.setWindowFlags(Qt.Window)
             self.power_rename_window.show()
@@ -1720,6 +1751,7 @@ class FileOrganizer(QWidget):
         
     def on_power_rename_closed(self):
         """PowerRename窗口关闭时的处理"""
+        self.power_rename_window = None  # 清空窗口引用
         self.imagesRenamed.emit()  # 发送信号，通知刷新图片列表
             
     def get_visible_files(self):
