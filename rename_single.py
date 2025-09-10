@@ -1668,6 +1668,8 @@ class FileOrganizer(QWidget):
                 files = self._collect_files_recursive(paths)
                 # 同步把资源管理器选择应用到主程序右侧视图
                 self._apply_paths_to_right(paths)
+                # 同步定位左侧文件树到传入的文件夹
+                self._sync_left_tree_to_paths(paths)
             if not files:
                 # 回退：左侧选择
                 selected = [idx for idx in self.left_tree.selectedIndexes() if idx.column() == 0]
@@ -1679,6 +1681,8 @@ class FileOrganizer(QWidget):
                         pass
                     files = self._collect_files_recursive(left_paths)
                     self._apply_paths_to_right(left_paths)
+                    # 同步定位左侧文件树到传入的文件夹
+                    self._sync_left_tree_to_paths(left_paths)
             if not files:
                 # 再回退：右侧可见
                 files = self.get_visible_files()
@@ -1991,6 +1995,70 @@ class FileOrganizer(QWidget):
             self.right_proxy.invalidate()
         except Exception as e:
             print(f"_apply_paths_to_right error: {e}")
+
+    def _sync_left_tree_to_paths(self, paths):
+        """同步左侧文件树定位到传入的路径"""
+        try:
+            if not paths:
+                return
+            
+            # 计算共同父目录
+            def _common_parent(dir_list):
+                parts = [os.path.abspath(d).split(os.sep) for d in dir_list]
+                if not parts:
+                    return None
+                min_len = min(len(x) for x in parts)
+                prefix = []
+                for i in range(min_len):
+                    token = parts[0][i]
+                    if all(x[i] == token for x in parts):
+                        prefix.append(token)
+                    else:
+                        break
+                return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
+            
+            # 获取所有路径的父目录
+            parent_dirs = []
+            for path in paths:
+                if os.path.isfile(path):
+                    parent_dirs.append(os.path.dirname(path))
+                elif os.path.isdir(path):
+                    parent_dirs.append(path)
+            
+            if not parent_dirs:
+                return
+                
+            # 计算共同父目录
+            common_parent = _common_parent(parent_dirs)
+            if not common_parent or not os.path.exists(common_parent):
+                return
+                
+            try:
+                print(f"[_sync_left_tree_to_paths] 定位到: {common_parent}")
+            except Exception:
+                pass
+            
+            # 展开并定位到共同父目录
+            self.expand_to_path(common_parent)
+            
+            # 如果有多个路径，尝试选中第一个路径
+            if len(paths) == 1:
+                target_path = paths[0]
+                if os.path.exists(target_path):
+                    # 定位到具体文件或文件夹
+                    target_index = self.left_model.index(target_path)
+                    if target_index.isValid():
+                        self.left_tree.setCurrentIndex(target_index)
+                        self.left_tree.scrollTo(target_index, QTreeView.PositionAtCenter)
+            else:
+                # 多个路径时，定位到共同父目录
+                parent_index = self.left_model.index(common_parent)
+                if parent_index.isValid():
+                    self.left_tree.setCurrentIndex(parent_index)
+                    self.left_tree.scrollTo(parent_index, QTreeView.PositionAtCenter)
+                    
+        except Exception as e:
+            print(f"_sync_left_tree_to_paths error: {e}")
 
     def on_left_tree_selection_changed(self, selected, deselected):
         """处理左侧文件树选择变化"""
