@@ -164,6 +164,9 @@ class PowerRenameDialog(QWidget):
         self.resize(1200, 700)
         self.setMinimumSize(800, 600)
         
+        # 设置窗口置顶
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+        
         # 设置图标
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
         self.setWindowIcon(QIcon(icon_path))
@@ -1542,7 +1545,7 @@ class FileOrganizer(QWidget):
         # 打开PowerRename窗口
         # 以无父窗口显示，避免带出主窗口
         self.power_rename_window = PowerRenameDialog(visible_files, None)
-        self.power_rename_window.setWindowFlags(Qt.Window)
+        self.power_rename_window.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.power_rename_window.show()
         
         # 连接窗口关闭信号
@@ -1703,7 +1706,7 @@ class FileOrganizer(QWidget):
             
             # 创建新的PowerRename窗口
             self.power_rename_window = PowerRenameDialog(files, None)
-            self.power_rename_window.setWindowFlags(Qt.Window)
+            self.power_rename_window.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
             self.power_rename_window.show()
             self.power_rename_window.window_closed.connect(self.on_power_rename_closed)
         except Exception as e:
@@ -1743,7 +1746,7 @@ class FileOrganizer(QWidget):
                 return
             
             self.power_rename_window = PowerRenameDialog(files, self)
-            self.power_rename_window.setWindowFlags(Qt.Window)
+            self.power_rename_window.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
             self.power_rename_window.show()
             self.power_rename_window.window_closed.connect(self.on_power_rename_closed)
         except Exception as e:
