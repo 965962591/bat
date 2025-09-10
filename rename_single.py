@@ -1040,16 +1040,16 @@ class FileOrganizer(QWidget):
         self.line_edit.addItem("$p_*")
         self.line_edit.addItem("$$p_*")
         self.line_edit.addItem("#_*")
-        self.line_edit.setFixedWidth(self.line_edit.width())  # 设置宽度
+        self.line_edit.setMinimumWidth(150)  # 设置宽度
 
-        self.replace_line_edit = QComboBox(self)
-        self.replace_line_edit.setEditable(True)  # 设置 QComboBox 为可编辑状态
-        # 设置输入框提示文本
-        self.replace_line_edit.lineEdit().setPlaceholderText("请输入替换内容")
+        # self.replace_line_edit = QComboBox(self)
+        # self.replace_line_edit.setEditable(True)  # 设置 QComboBox 为可编辑状态
+        # # 设置输入框提示文本
+        # self.replace_line_edit.lineEdit().setPlaceholderText("请输入替换内容")
 
-        # 默认隐藏
-        self.replace_line_edit.setVisible(False)
-        self.replace_line_edit.setFixedWidth(self.replace_line_edit.width())  # 设置宽度
+        # # 默认隐藏
+        # self.replace_line_edit.setVisible(False)
+        # self.replace_line_edit.setFixedWidth(self.replace_line_edit.width())  # 设置宽度
 
         # 开始按钮
         self.start_button = QPushButton("开始", self)
@@ -1068,7 +1068,7 @@ class FileOrganizer(QWidget):
 
         # 这些控件将被添加到状态栏右侧
         right_bottom_layout.addWidget(self.line_edit)
-        right_bottom_layout.addWidget(self.replace_line_edit)
+        # right_bottom_layout.addWidget(self.replace_line_edit)
         right_bottom_layout.addWidget(self.start_button)
         right_bottom_layout.addWidget(self.preview_button)
         right_bottom_layout.addWidget(self.power_rename_button)
@@ -1142,7 +1142,7 @@ class FileOrganizer(QWidget):
         self.status_bar.setFixedHeight(40)
         # 将控件作为永久部件添加（自动靠右对齐）
         self.status_bar.addPermanentWidget(self.line_edit)
-        self.status_bar.addPermanentWidget(self.replace_line_edit)
+        # self.status_bar.addPermanentWidget(self.replace_line_edit)
         self.status_bar.addPermanentWidget(self.start_button)
         self.status_bar.addPermanentWidget(self.preview_button)
         self.status_bar.addPermanentWidget(self.power_rename_button)
@@ -1428,7 +1428,7 @@ class FileOrganizer(QWidget):
     def rename_files(self):
         prefix = self.line_edit.currentText()
         replace_text = (
-            self.replace_line_edit.currentText()
+            # self.replace_line_edit.currentText()
             # if self.replace_checkbox.isChecked()
             # else None
         )
@@ -1551,7 +1551,7 @@ class FileOrganizer(QWidget):
         rename_data = []
         prefix = self.line_edit.currentText()
         replace_text = (
-            self.replace_line_edit.currentText()
+            # self.replace_line_edit.currentText()
             # if self.replace_checkbox.isChecked()
             # else None
         )
