@@ -1657,34 +1657,215 @@ class FileOrganizer(QWidget):
         return files
 
     def _get_explorer_selected_paths(self):
-        """读取 Windows 资源管理器当前选中的项目路径列表（需要 pywin32）。失败返回空列表。"""
-        if os.name != 'nt' or win32com is None:
+        """使用 oleacc(MSAA) 为主方案获取资源管理器选中项；失败回退 COM。"""
+        if os.name != 'nt' or ctypes is None:
+            return []
+
+        def _get_active_explorer_root_hwnd():
+            user32 = ctypes.windll.user32
+            GetAncestor = user32.GetAncestor
+            GetAncestor.restype = wintypes.HWND
+            GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            GA_ROOT = 2
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return 0
+            return GetAncestor(hwnd, GA_ROOT) or hwnd
+
+        def _find_syslistview32(hwnd_root):
+            user32 = ctypes.windll.user32
+            FindWindowExW = user32.FindWindowExW
+            FindWindowExW.restype = wintypes.HWND
+            FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+
+            def _find_defview(start):
+                # 常见层级：ShellTabWindowClass -> SHELLDLL_DefView -> SysListView32
+                shelltab = FindWindowExW(start, 0, "ShellTabWindowClass", None)
+                if shelltab:
+                    defview = FindWindowExW(shelltab, 0, "SHELLDLL_DefView", None)
+                    if defview:
+                        return defview
+                defview = FindWindowExW(start, 0, "SHELLDLL_DefView", None)
+                if defview:
+                    return defview
+                # 广度搜索一层子窗体
+                child = FindWindowExW(start, 0, None, None)
+                while child:
+                    shelltab = FindWindowExW(child, 0, "ShellTabWindowClass", None)
+                    if shelltab:
+                        defview = FindWindowExW(shelltab, 0, "SHELLDLL_DefView", None)
+                        if defview:
+                            return defview
+                    defview = FindWindowExW(child, 0, "SHELLDLL_DefView", None)
+                    if defview:
+                        return defview
+                    child = FindWindowExW(start, child, None, None)
+                return 0
+
+            defview = _find_defview(hwnd_root)
+            if not defview:
+                return 0
+            listview = FindWindowExW(defview, 0, "SysListView32", None)
+            return listview or 0
+
+        def _enum_selected_names_from_listview(listview_hwnd):
+            user32 = ctypes.windll.user32
+            LVM_FIRST = 0x1000
+            LVM_GETNEXTITEM = LVM_FIRST + 12
+            LVM_GETITEMTEXTW = LVM_FIRST + 115
+            LVNI_SELECTED = 0x0002
+
+            class LVITEMW(ctypes.Structure):
+                _fields_ = [
+                    ("mask", wintypes.UINT),
+                    ("iItem", wintypes.INT),
+                    ("iSubItem", wintypes.INT),
+                    ("state", wintypes.UINT),
+                    ("stateMask", wintypes.UINT),
+                    ("pszText", wintypes.LPWSTR),
+                    ("cchTextMax", wintypes.INT),
+                    ("iImage", wintypes.INT),
+                    ("lParam", wintypes.LPARAM),
+                    ("iIndent", wintypes.INT),
+                    ("iGroupId", wintypes.INT),
+                    ("cColumns", wintypes.UINT),
+                    ("puColumns", ctypes.POINTER(wintypes.UINT)),
+                    ("piColFmt", ctypes.POINTER(wintypes.INT)),
+                    ("iGroup", wintypes.INT),
+                ]
+
+            SendMessageW = user32.SendMessageW
+            SendMessageW.restype = wintypes.LRESULT
+            SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+
+            names = []
+            idx = -1
+            while True:
+                idx = SendMessageW(listview_hwnd, LVM_GETNEXTITEM, idx, LVNI_SELECTED)
+                if idx == -1 or idx > 100000:
+                    break
+                buf = ctypes.create_unicode_buffer(1024)
+                lvitem = LVITEMW()
+                lvitem.iSubItem = 0
+                lvitem.cchTextMax = 1024
+                lvitem.pszText = ctypes.cast(buf, wintypes.LPWSTR)
+                SendMessageW(listview_hwnd, LVM_GETITEMTEXTW, idx, ctypes.byref(lvitem))
+                text = buf.value.strip()
+                if text:
+                    names.append(text)
+            return names
+
+        try:
+            hwnd_root = _get_active_explorer_root_hwnd()
+            if hwnd_root:
+                listview = _find_syslistview32(hwnd_root)
+                if listview:
+                    names = _enum_selected_names_from_listview(listview)
+                    if names:
+                        # 用 COM 仅获取当前文件夹路径（不读取选中项），保持 oleacc 为主
+                        folder_path = None
+                        try:
+                            if win32com is not None:
+                                pythoncom.CoInitialize()
+                                shell = win32com.client.Dispatch("Shell.Application")
+                                windows = shell.Windows()
+                                for w in windows:
+                                    try:
+                                        fullname = str(getattr(w, 'FullName', '')).lower()
+                                        if not fullname.endswith('explorer.exe'):
+                                            continue
+                                        if int(getattr(w, 'HWND', 0)) == int(hwnd_root):
+                                            doc = getattr(w, 'Document', None)
+                                            if doc and getattr(doc, 'Folder', None) and getattr(doc.Folder, 'Self', None):
+                                                folder_path = str(doc.Folder.Self.Path)
+                                            break
+                                    except Exception:
+                                        continue
+                        except Exception:
+                            folder_path = None
+
+                        # 如果没拿到，直接返回名字列表（由上层自行处理）；否则拼接为完整路径
+                        if folder_path and os.path.isdir(folder_path):
+                            full_paths = []
+                            for nm in names:
+                                p = os.path.join(folder_path, nm)
+                                # 可能包含文件夹与文件，均保留
+                                if os.path.exists(p):
+                                    full_paths.append(p)
+                                else:
+                                    # 某些视图显示的名称可能是实际大小写不同，尝试不区分大小写匹配一次
+                                    try:
+                                        for entry in os.listdir(folder_path):
+                                            if entry.lower() == nm.lower():
+                                                q = os.path.join(folder_path, entry)
+                                                if os.path.exists(q):
+                                                    full_paths.append(q)
+                                                    break
+                                    except Exception:
+                                        pass
+                            # 过滤自身程序目录
+                            app_base_dirs = self._get_app_base_dir()
+                            normed = [os.path.normcase(os.path.abspath(x)) for x in full_paths]
+                            def _is_under_any_app_dir(p):
+                                for base in (app_base_dirs or []):
+                                    try:
+                                        if p == base or p.startswith(base + os.sep):
+                                            return True
+                                    except Exception:
+                                        continue
+                                if p.endswith('.dist') or p.endswith('.onefile-temp'):
+                                    return True
+                                return False
+                            filtered = [x for x in normed if not _is_under_any_app_dir(x)]
+                            # 将原值映射回去
+                            out = []
+                            for x in full_paths:
+                                try:
+                                    n = os.path.normcase(os.path.abspath(x))
+                                except Exception:
+                                    n = x
+                                if n in filtered:
+                                    out.append(x)
+                            if out:
+                                try:
+                                    print(f"[_get_explorer_selected_paths][oleacc] hwnd={hwnd_root}, items={len(out)}")
+                                except Exception:
+                                    pass
+                                return out
+                        else:
+                            # 仅返回名称，供上层回退逻辑处理
+                            try:
+                                print("[_get_explorer_selected_paths][oleacc] got names but no folder path")
+                            except Exception:
+                                pass
+        except Exception as e:
+            try:
+                print(f"[_get_explorer_selected_paths][oleacc] error: {e}")
+            except Exception:
+                pass
+
+        # 回退：COM 直接取 SelectedItems（原实现）
+        if win32com is None:
             return []
         try:
             pythoncom.CoInitialize()
             shell = win32com.client.Dispatch("Shell.Application")
             windows = shell.Windows()
-            # 遍历所有资源管理器窗口，找出当前活动窗口
-            active_hwnd = 0
-            try:
-                import ctypes
-                active_hwnd = ctypes.windll.user32.GetForegroundWindow()
-            except Exception:
-                active_hwnd = 0
-            # 仅匹配 Explorer 窗口，并优先活动窗口
+            user32 = ctypes.windll.user32
+            active_hwnd = user32.GetForegroundWindow()
             candidates = []
             for w in windows:
                 try:
                     fullname = str(getattr(w, 'FullName', '')).lower()
                     if not fullname.endswith('explorer.exe'):
                         continue
-                    hwnd = getattr(w, 'HWND', 0)
-                    candidates.append((hwnd, w))
+                    hwnd = int(getattr(w, 'HWND', 0))
+                    candidates.append((0 if hwnd == active_hwnd else 1, hwnd, w))
                 except Exception:
                     continue
-            candidates.sort(key=lambda t: 0 if t[0] == active_hwnd else 1)
+            candidates.sort(key=lambda t: t[0])
             app_base_dirs = self._get_app_base_dir()
-            for hwnd, w in candidates:
+            for _, hwnd, w in candidates:
                 try:
                     doc = getattr(w, 'Document', None)
                     if not doc:
@@ -1698,7 +1879,6 @@ class FileOrganizer(QWidget):
                         p = getattr(it, 'Path', None)
                         if isinstance(p, str) and os.path.exists(p):
                             paths.append(p)
-                    # 过滤掉本程序目录（如 Nuitka/pyinstaller 打包目录以及其父目录）
                     if paths:
                         normed = [os.path.normcase(os.path.abspath(x)) for x in paths]
                         def _is_under_any_app_dir(p):
@@ -1708,39 +1888,25 @@ class FileOrganizer(QWidget):
                                         return True
                                 except Exception:
                                     continue
-                            # 额外：过滤掉以 .dist/.onefile-temp 结尾的目录
                             if p.endswith('.dist') or p.endswith('.onefile-temp'):
                                 return True
                             return False
                         filtered = [p for p in normed if not _is_under_any_app_dir(p)]
-                        if len(filtered) != len(normed):
-                            try:
-                                print(f"[_get_explorer_selected_paths] filtered {len(normed) - len(filtered)} app-dir items, hwnd={hwnd}")
-                            except Exception:
-                                pass
-                        # 如果全被过滤，跳过该窗口
-                        if not filtered:
-                            try:
-                                print(f"[_get_explorer_selected_paths] skip window, all items under app dirs")
-                            except Exception:
-                                pass
-                            continue
-                        # 将过滤后的原始大小写路径映射回去（以原值为准）
-                        original_keep = []
+                        # 映射回原值
+                        out = []
                         for x in paths:
                             try:
                                 n = os.path.normcase(os.path.abspath(x))
                             except Exception:
                                 n = x
                             if n in filtered:
-                                original_keep.append(x)
-                        paths = original_keep
-                    if paths:
-                        try:
-                            print(f"[_get_explorer_selected_paths] use explorer hwnd={hwnd}, items={len(paths)}")
-                        except Exception:
-                            pass
-                        return paths
+                                out.append(x)
+                        if out:
+                            try:
+                                print(f"[_get_explorer_selected_paths][COM] hwnd={hwnd}, items={len(out)}")
+                            except Exception:
+                                pass
+                            return out
                 except Exception:
                     continue
         except Exception:

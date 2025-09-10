@@ -23,8 +23,8 @@ if sys.platform == "win32":
         '--windows-uac-admin',
         '--output-dir=output',        
         'rename_single.py',
-        '--windows-file-version=3.8.3.0',
-        '--windows-product-version=3.8.3.0',
+        '--windows-file-version=1.5.2',
+        '--windows-product-version=1.5.2',
         '--windows-file-description=文件重命名工具',
         '--windows-company-name=LongCheer',
         '--copyright=BarryChen'
