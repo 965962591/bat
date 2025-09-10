@@ -1124,6 +1124,20 @@ class FileOrganizer(QWidget):
             except Exception as e:
                 print(f"Ctrl+M trigger error: {e}")
         self.shortcut_powerrename.activated.connect(_hotkey_trigger)
+        
+        # 添加 Ctrl+N：优先使用资源管理器选中路径传入主窗口
+        self.shortcut_main_window = QShortcut(QKeySequence("Ctrl+N"), self)
+        try:
+            self.shortcut_main_window.setContext(Qt.ApplicationShortcut)
+        except Exception:
+            pass
+        def _hotkey_main_trigger():
+            try:
+                # 将路径传给主窗口并打开主窗口
+                self.open_main_window_from_explorer_or_fallback()
+            except Exception as e:
+                print(f"Ctrl+N trigger error: {e}")
+        self.shortcut_main_window.activated.connect(_hotkey_main_trigger)
         # self.show()
         # 初始化系统托盘
         self.setup_tray_icon()
@@ -1716,6 +1730,49 @@ class FileOrganizer(QWidget):
         except Exception as e:
             print(f"open_power_rename_from_explorer_or_fallback error: {e}")
 
+    def open_main_window_from_explorer_or_fallback(self):
+        """优先使用资源管理器选中项；否则回退左侧选择；再否则用右侧可见文件。将路径传给主窗口并打开主窗口。"""
+        try:
+            paths = self._get_explorer_selected_paths()
+            if not paths:
+                # 回退：左侧选择
+                selected = [idx for idx in self.left_tree.selectedIndexes() if idx.column() == 0]
+                if selected:
+                    paths = [self.left_model.filePath(idx) for idx in selected]
+                else:
+                    # 再回退：右侧可见
+                    visible_files = self.get_visible_files()
+                    if visible_files:
+                        # 从可见文件获取路径
+                        paths = []
+                        for file_path in visible_files:
+                            parent_dir = os.path.dirname(file_path)
+                            if parent_dir not in paths:
+                                paths.append(parent_dir)
+            
+            if not paths:
+                QMessageBox.information(self, "提示", "没有可传入的路径")
+                return
+                
+            try:
+                print(f"[Ctrl+N] 传入路径: {len(paths)} 个")
+            except Exception:
+                pass
+            
+            # 将路径应用到右侧视图
+            self._apply_paths_to_right(paths)
+            # 同步定位左侧文件树到传入的文件夹
+            self._sync_left_tree_to_paths(paths)
+            
+            # 显示并激活主窗口
+            self.show()
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
+            self.raise_()
+            self.activateWindow()
+            
+        except Exception as e:
+            print(f"open_main_window_from_explorer_or_fallback error: {e}")
+
     def open_power_rename_from_left_selection(self):
         """将左侧选中的路径直接展开为文件列表并打开 PowerRename"""
         try:
@@ -2151,22 +2208,32 @@ class FileOrganizer(QWidget):
             pass
         super().closeEvent(event)
 
-    # ---------------- 全局热键 Ctrl+M ----------------
+    # ---------------- 全局热键 Ctrl+M 和 Ctrl+N ----------------
     def setup_global_hotkey(self):
-        """注册 Windows 全局热键 Ctrl+M 并安装原生事件过滤器"""
+        """注册 Windows 全局热键 Ctrl+M 和 Ctrl+N 并安装原生事件过滤器"""
         if os.name != 'nt' or ctypes is None:
             return
         try:
             MOD_CONTROL = 0x0002
             VK_M = 0x4D
-            self._HOTKEY_ID = 0xBEEF
+            VK_N = 0x4E
+            self._HOTKEY_ID_M = 0xBEEF
+            self._HOTKEY_ID_N = 0xBEEF + 1
 
             user32 = ctypes.windll.user32
             hwnd = int(self.winId())
-            # RegisterHotKey(HWND, id, fsModifiers, vk)
-            if not user32.RegisterHotKey(hwnd, self._HOTKEY_ID, MOD_CONTROL, VK_M):
-                print("RegisterHotKey 失败，可能被占用或无权限")
-                return
+            
+            # 注册 Ctrl+M 热键
+            if not user32.RegisterHotKey(hwnd, self._HOTKEY_ID_M, MOD_CONTROL, VK_M):
+                print("RegisterHotKey Ctrl+M 失败，可能被占用或无权限")
+            else:
+                print("注册全局热键 Ctrl+M 成功")
+                
+            # 注册 Ctrl+N 热键
+            if not user32.RegisterHotKey(hwnd, self._HOTKEY_ID_N, MOD_CONTROL, VK_N):
+                print("RegisterHotKey Ctrl+N 失败，可能被占用或无权限")
+            else:
+                print("注册全局热键 Ctrl+N 成功")
 
             class _HotkeyFilter(QAbstractNativeEventFilter):
                 def __init__(self, outer):
@@ -2177,9 +2244,13 @@ class FileOrganizer(QWidget):
                         if eventType == b'windows_generic_MSG' or eventType == 'windows_generic_MSG':
                             msg = ctypes.wintypes.MSG.from_address(int(message))
                             if msg.message == 0x0312:  # WM_HOTKEY
-                                if msg.wParam == self.outer._HOTKEY_ID:
+                                if msg.wParam == self.outer._HOTKEY_ID_M:
                                     # 触发：仅显示 PowerRename，不唤起主窗口
                                     self.outer.open_power_rename_from_explorer_or_fallback()
+                                    return True, 0
+                                elif msg.wParam == self.outer._HOTKEY_ID_N:
+                                    # 触发：将路径传给主窗口并打开主窗口
+                                    self.outer.open_main_window_from_explorer_or_fallback()
                                     return True, 0
                     except Exception:
                         pass
@@ -2194,8 +2265,10 @@ class FileOrganizer(QWidget):
         if os.name != 'nt' or ctypes is None:
             return
         try:
-            if hasattr(self, '_HOTKEY_ID'):
-                ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._HOTKEY_ID)
+            if hasattr(self, '_HOTKEY_ID_M'):
+                ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._HOTKEY_ID_M)
+            if hasattr(self, '_HOTKEY_ID_N'):
+                ctypes.windll.user32.UnregisterHotKey(int(self.winId()), self._HOTKEY_ID_N)
         except Exception:
             pass
 
