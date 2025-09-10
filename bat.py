@@ -2419,9 +2419,9 @@ class FileDownloadDialog(QDialog):
         self.browse_dest_btn.setToolTip("浏览目标文件夹")
         self.open_dest_btn = QPushButton("打开")
         self.open_dest_btn.setToolTip("打开目标文件夹")        # 添加重命名功能按钮
-        rename_btn = QPushButton("重命名")
-        rename_btn.setToolTip("启动文件重命名工具")
-        rename_btn.clicked.connect(self.open_rename_tool)
+        # rename_btn = QPushButton("重命名")
+        # rename_btn.setToolTip("启动文件重命名工具")
+        # rename_btn.clicked.connect(self.open_rename_tool)
         self.open_dest_btn.clicked.connect(self.open_target_folder)
         self.browse_dest_btn.clicked.connect(self.browse_destination)
         
@@ -2429,7 +2429,7 @@ class FileDownloadDialog(QDialog):
         dest_location_layout.addWidget(self.dest_location_input)
         dest_location_layout.addWidget(self.browse_dest_btn)
         dest_location_layout.addWidget(self.open_dest_btn)
-        dest_location_layout.addWidget(rename_btn)
+        # dest_location_layout.addWidget(rename_btn)
         dest_layout.addLayout(dest_location_layout)
         
         # 子文件夹创建选项
@@ -3126,24 +3126,24 @@ class FileDownloadDialog(QDialog):
             # 更新下载按钮状态
             self.update_download_button_state()
 
-    def open_rename_tool(self):
-        """打开文件重命名工具"""
-        try:
-            # 获取当前设置的目标路径
-            target_path = self.dest_location_input.text().strip()
-            if not target_path or not os.path.exists(target_path):
-                QMessageBox.warning(self, "路径错误", "请先设置有效的目标路径！")
-                return
+    # def open_rename_tool(self):
+    #     """打开文件重命名工具"""
+    #     try:
+    #         # 获取当前设置的目标路径
+    #         target_path = self.dest_location_input.text().strip()
+    #         if not target_path or not os.path.exists(target_path):
+    #             QMessageBox.warning(self, "路径错误", "请先设置有效的目标路径！")
+    #             return
             
-            # 启动FileOrganizer重命名工具，并传入目标路径
-            self.file_organizer = FileOrganizer()
-            # 设置文件夹路径（不再需要folder_input，直接使用set_folder_path）
-            self.file_organizer.set_folder_path(target_path)
-            self.file_organizer.show()
-            print(f"已启动文件重命名工具，路径: {target_path}")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"启动重命名工具失败: {str(e)}")
-            print(f"启动重命名工具失败: {str(e)}")
+    #         # 启动FileOrganizer重命名工具，并传入目标路径
+    #         self.file_organizer = FileOrganizer()
+    #         # 设置文件夹路径（不再需要folder_input，直接使用set_folder_path）
+    #         self.file_organizer.set_folder_path(target_path)
+    #         self.file_organizer.show()
+    #         print(f"已启动文件重命名工具，路径: {target_path}")
+    #     except Exception as e:
+    #         QMessageBox.critical(self, "错误", f"启动重命名工具失败: {str(e)}")
+    #         print(f"启动重命名工具失败: {str(e)}")
 
     def closeEvent(self, event):
         """窗口关闭事件"""
