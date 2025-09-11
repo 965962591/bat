@@ -754,6 +754,104 @@ class LogVerboseMaskApp(QMainWindow):
         quick_menu = menubar.addMenu('快捷功能')
         self.create_quick_functions_menu(quick_menu)
 
+        #安装APK菜单
+        install_apk_menu = menubar.addMenu('安装APK')
+        self.create_install_apk_menu(install_apk_menu)
+
+    def create_install_apk_menu(self, install_apk_menu):
+        """创建安装APK菜单"""
+        install_apk_action = QAction('批量安装APK', self)
+        install_apk_action.setToolTip('批量安装APK')
+        install_apk_action.triggered.connect(self.install_apk)
+        install_apk_menu.addAction(install_apk_action)
+
+    def install_apk(self):
+        """安装APK"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+        try:
+            from PyQt5.QtWidgets import QFileDialog, QProgressDialog
+            folder = QFileDialog.getExistingDirectory(self, "选择包含APK的文件夹")
+            if not folder:
+                return
+
+            # 收集该目录下的所有apk文件（不递归）
+            try:
+                entries = os.listdir(folder)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"无法读取文件夹：\n{str(e)}")
+                return
+
+            apk_files = []
+            for name in entries:
+                path = os.path.join(folder, name)
+                if os.path.isfile(path) and name.lower().endswith('.apk'):
+                    apk_files.append(path)
+
+            if not apk_files:
+                QMessageBox.information(self, "提示", "该文件夹下未找到APK文件。")
+                return
+
+            total = len(apk_files)
+
+            # 进度对话框
+            progress = QProgressDialog("准备安装...", "取消", 0, total, self)
+            progress.setWindowTitle("批量安装APK")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+
+            # 启动后台线程
+            self.install_thread = InstallApkThread(selected_device, apk_files)
+
+            def on_progress_changed(index, total_count, filename):
+                base = os.path.basename(filename) if filename else ""
+                progress.setLabelText(f"正在安装: {base}  ({index}/{total_count})")
+                progress.setMaximum(total_count)
+                progress.setValue(index)
+
+            def on_finished(success_list, failed_list, cancelled):
+                progress.close()
+                if cancelled:
+                    QMessageBox.information(self, "已取消", "用户取消了批量安装。")
+                else:
+                    success_count = len(success_list)
+                    failed_count = len(failed_list)
+                    summary = [
+                        f"共发现APK：{total}",
+                        f"安装成功：{success_count}",
+                        f"安装失败：{failed_count}"
+                    ]
+                    if failed_list:
+                        summary.append("\n失败明细：")
+                        preview = failed_list[:20]
+                        summary.extend(preview)
+                        if failed_count > 20:
+                            summary.append(f"... 以及另外 {failed_count - 20} 条失败")
+                    QMessageBox.information(self, "批量安装结果", "\n".join(summary))
+                # 清理线程对象
+                try:
+                    self.install_thread.deleteLater()
+                except Exception:
+                    pass
+
+            def on_canceled():
+                if hasattr(self, 'install_thread') and self.install_thread is not None:
+                    self.install_thread.request_cancel()
+
+            self.install_thread.progress_changed.connect(on_progress_changed)
+            self.install_thread.install_finished.connect(on_finished)
+            progress.canceled.connect(on_canceled)
+            self.install_thread.start()
+            progress.show()
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"批量安装过程中发生异常：\n{str(e)}")
+
     def load_secret_codes(self):
         """从INI文件加载暗码配置"""
         ini_path = os.path.join(APP_CACHE_DIR, "bat_filepath.ini")
@@ -923,10 +1021,6 @@ class LogVerboseMaskApp(QMainWindow):
         edit_device_button = QPushButton("编辑名称")
         edit_device_button.setToolTip("自定义设备名称")
         edit_device_button.clicked.connect(self.edit_current_device_name)
-
-
-
-
         # 添加投屏按钮
         adb_interface_button = QPushButton("投屏")
         adb_interface_button.setToolTip("打开adb投屏窗口")
@@ -3752,6 +3846,61 @@ class DownloadThread(QThread):
             print(f"[调试] 统计本地文件数量时出错: {e}")
             return 0
     
+
+class InstallApkThread(QThread):
+    """后台安装APK线程，支持进度与取消"""
+    progress_changed = pyqtSignal(int, int, str)  # 当前序号, 总数, 当前文件
+    install_finished = pyqtSignal(list, list, bool)  # 成功列表, 失败列表, 是否取消
+
+    def __init__(self, device_id, apk_files):
+        super().__init__()
+        self.device_id = device_id
+        self.apk_files = list(apk_files)
+        self._cancel_requested = False
+
+    def request_cancel(self):
+        self._cancel_requested = True
+
+    def run(self):
+        success_list = []
+        failed_list = []
+        total = len(self.apk_files)
+
+        startupinfo = None
+        if hasattr(subprocess, 'STARTUPINFO'):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+
+        for idx, apk_path in enumerate(self.apk_files, start=1):
+            if self._cancel_requested:
+                self.install_finished.emit(success_list, failed_list, True)
+                return
+
+            # 更新进度（开始安装当前APK前）
+            self.progress_changed.emit(idx - 1, total, apk_path)
+            command = f"adb -s {self.device_id} install -r \"{apk_path}\""
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    startupinfo=startupinfo
+                )
+                if result.returncode == 0 and ("Success" in (result.stdout or "") or not result.stderr):
+                    success_list.append(os.path.basename(apk_path))
+                else:
+                    reason = (result.stderr or result.stdout or '').strip()
+                    failed_list.append(f"{os.path.basename(apk_path)} -> {reason[:160]}")
+            except Exception as e:
+                failed_list.append(f"{os.path.basename(apk_path)} -> {str(e)}")
+
+        # 进度设置为完成
+        self.progress_changed.emit(total, total, "")
+        self.install_finished.emit(success_list, failed_list, False)
+
 
 
 if __name__ == "__main__":
