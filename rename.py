@@ -11,6 +11,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
 
+
 class ExcludeFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -989,10 +990,6 @@ class PowerRenameDialog(QWidget):
         self.file_list = new_file_list
         print(f"重命名后刷新文件列表: {len(self.file_list)} 个文件")
         
-    def closeEvent(self, event):
-        """窗口关闭事件"""
-        self.window_closed.emit()
-        super().closeEvent(event)
 
 
 class PreviewDialog(QDialog):
@@ -1264,84 +1261,278 @@ class FileOrganizer(QWidget):
             # 仅处理右侧树或其视口上的事件
             if obj in (getattr(self, 'right_tree', None), getattr(self.right_tree, 'viewport', lambda: None)()):
                 if event.type() in (QEvent.DragEnter, QEvent.DragMove):
-                    mime = getattr(event, 'mimeData', lambda: None)()
-                    if mime and mime.hasUrls():
+                    try:
+                        mime = getattr(event, 'mimeData', lambda: None)()
+                        if mime and mime.hasUrls():
+                            event.acceptProposedAction()
+                            return True
+                    except Exception as e:
+                        print(f"处理拖拽进入事件失败: {e}")
+                        return False
+                        
+                elif event.type() == QEvent.Drop:
+                    try:
+                        mime = getattr(event, 'mimeData', lambda: None)()
+                        if not mime or not mime.hasUrls():
+                            return True
+                            
+                        urls = mime.urls()
+                        paths = []
+                        
+                        for url in urls:
+                            try:
+                                if url.isLocalFile():
+                                    p = url.toLocalFile()
+                                    if p and (Path(p).exists()):  # 确保路径存在
+                                        paths.append(p)
+                            except Exception as e:
+                                print(f"处理URL失败: {e}")
+                                continue
+                        
+                        if paths:
+                            # 异步处理拖拽的路径，避免阻塞UI
+                            QTimer.singleShot(10, lambda: self._set_right_view_with_paths(paths))
+                        
                         event.acceptProposedAction()
                         return True
-                elif event.type() == QEvent.Drop:
-                    mime = getattr(event, 'mimeData', lambda: None)()
-                    if not mime or not mime.hasUrls():
-                        return True
-                    urls = mime.urls()
-                    paths = []
-                    for url in urls:
-                        try:
-                            if url.isLocalFile():
-                                p = url.toLocalFile()
-                                if p:
-                                    paths.append(p)
-                        except Exception:
-                            continue
-                    if paths:
-                        self._set_right_view_with_paths(paths)
-                    event.acceptProposedAction()
-                    return True
-        except Exception:
-            pass
+                        
+                    except Exception as e:
+                        print(f"处理拖拽放下事件失败: {e}")
+                        return False
+                        
+        except Exception as e:
+            print(f"事件过滤器失败: {e}")
+            
         return super().eventFilter(obj, event)
 
     def _set_right_view_with_paths(self, paths):
         """将右侧视图设置为显示指定路径（支持文件/文件夹），并建立白名单。"""
-        if not paths:
-            return
-            
-        # 使用Path对象归一化并区分文件与目录
-        files = []
-        dirs = []
-        for p in dict.fromkeys(paths):
-            path_obj = Path(p)
-            if path_obj.is_file():
-                files.append(str(path_obj))
-            elif path_obj.is_dir():
-                dirs.append(str(path_obj))
+        try:
+            if not paths:
+                return
+                
+            # 使用Path对象归一化并区分文件与目录
+            files = []
+            dirs = []
+            for p in dict.fromkeys(paths):
+                try:
+                    path_obj = Path(p)
+                    if path_obj.is_file():
+                        files.append(str(path_obj))
+                    elif path_obj.is_dir():
+                        dirs.append(str(path_obj))
+                except Exception as e:
+                    print(f"处理路径失败 {p}: {e}")
+                    continue
 
-        # 计算共同父目录
-        def common_parent(dir_list):
-            if not dir_list:
-                return None
-            paths = [Path(d).resolve() for d in dir_list]
-            try:
-                common_path_str = os.path.commonpath([str(p) for p in paths])
-                return str(Path(common_path_str).resolve())
-            except ValueError:
-                return str(paths[0].parent)
+            # 计算共同父目录
+            def common_parent(dir_list):
+                if not dir_list:
+                    return None
+                try:
+                    paths = [Path(d).resolve() for d in dir_list]
+                    common_path_str = os.path.commonpath([str(p) for p in paths])
+                    return str(Path(common_path_str).resolve())
+                except (ValueError, OSError) as e:
+                    print(f"计算共同父目录失败: {e}")
+                    return str(Path(dir_list[0]).parent) if dir_list else None
 
-        candidate_dirs = list(dirs)
-        # 若包含文件，以其父目录参与共同父目录计算
-        candidate_dirs.extend([str(Path(f).parent) for f in files])
-        target_dir = common_parent(candidate_dirs) if candidate_dirs else None
+            candidate_dirs = list(dirs)
+            # 若包含文件，以其父目录参与共同父目录计算
+            candidate_dirs.extend([str(Path(f).parent) for f in files])
+            target_dir = common_parent(candidate_dirs) if candidate_dirs else None
 
-        # 重置右侧过滤状态
-        self._right_excluded_paths = []
-        self.right_proxy.clear_excluded()
-        self.right_proxy.set_hide_all(False)
+            if not target_dir or not Path(target_dir).is_dir():
+                print(f"无效的目标目录: {target_dir}")
+                return
 
-        # 设置白名单：优先文件，否则目录
-        if files:
-            self.right_proxy.set_included(set(files))
-        elif dirs:
-            self.right_proxy.set_included(set(dirs))
-        else:
-            self.right_proxy.clear_included()
+            # 功能2：左侧同步定位到拖拽的文件夹位置（异步执行，避免阻塞）
+            QTimer.singleShot(50, lambda: self._safe_expand_to_path(target_dir))
 
-        # 设置右侧根目录
-        if target_dir and Path(target_dir).is_dir():
+            # 重置右侧过滤状态
+            self._right_excluded_paths = []
+            self.right_proxy.clear_excluded()
+            self.right_proxy.set_hide_all(False)
+
+            # 设置白名单：优先文件，否则目录
+            if files:
+                self.right_proxy.set_included(set(files))
+            elif dirs:
+                self.right_proxy.set_included(set(dirs))
+            else:
+                self.right_proxy.clear_included()
+
+            # 设置右侧根目录
             try:
                 root_source_index = self.right_model.index(target_dir)
-                self.right_tree.setRootIndex(self.right_proxy.mapFromSource(root_source_index))
+                if not root_source_index.isValid():
+                    print(f"无效的源索引: {target_dir}")
+                    return
+                    
+                proxy_root_index = self.right_proxy.mapFromSource(root_source_index)
+                if not proxy_root_index.isValid():
+                    print(f"无效的代理索引: {target_dir}")
+                    return
+                    
+                self.right_tree.setRootIndex(proxy_root_index)
                 self._empty_dir = None
-            except Exception:
-                pass
+                
+                # 功能1：自动展开文件数量少于50的文件夹（使用路径而不是索引）
+                QTimer.singleShot(300, lambda: self._safe_auto_expand_small_folders(target_dir))
+                
+            except Exception as e:
+                print(f"设置右侧根目录失败: {e}")
+                
+        except Exception as e:
+            print(f"设置右侧视图失败: {e}")
+    
+    def _safe_expand_to_path(self, target_dir):
+        """安全地展开到路径"""
+        try:
+            if target_dir and Path(target_dir).is_dir():
+                self.expand_to_path(target_dir)
+        except Exception as e:
+            print(f"安全展开路径失败: {e}")
+    
+    def _safe_auto_expand_small_folders(self, target_dir):
+        """安全地自动展开小文件夹"""
+        try:
+            if not target_dir or not Path(target_dir).is_dir():
+                return
+                
+            # 重新获取索引，确保有效性
+            root_source_index = self.right_model.index(target_dir)
+            if not root_source_index.isValid():
+                return
+                
+            proxy_root_index = self.right_proxy.mapFromSource(root_source_index)
+            if not proxy_root_index.isValid():
+                return
+                
+            self._auto_expand_small_folders(proxy_root_index)
+            
+        except Exception as e:
+            print(f"安全自动展开失败: {e}")
+
+    def _auto_expand_small_folders(self, parent_index):
+        """自动展开文件数量少于50的文件夹"""
+        try:
+            if not parent_index.isValid():
+                return
+                
+            # 递归检查并展开小文件夹
+            self._expand_folders_recursive(parent_index, max_depth=3)  # 限制递归深度为3层
+            
+        except Exception as e:
+            print(f"自动展开文件夹失败: {e}")
+    
+    def _expand_folders_recursive(self, parent_index, current_depth=0, max_depth=3):
+        """递归展开小文件夹"""
+        try:
+            if current_depth >= max_depth:
+                return
+                
+            # 检查索引有效性
+            if not parent_index.isValid():
+                return
+                
+            row_count = self.right_proxy.rowCount(parent_index)
+            if row_count == 0:
+                return
+            
+            # 收集需要处理的文件夹信息，避免在循环中使用lambda闭包
+            folders_to_process = []
+                
+            for row in range(row_count):
+                try:
+                    child_index = self.right_proxy.index(row, 0, parent_index)
+                    if not child_index.isValid():
+                        continue
+                        
+                    source_index = self.right_proxy.mapToSource(child_index)
+                    if not source_index.isValid() or not self.right_model.isDir(source_index):
+                        continue
+                        
+                    # 获取文件夹路径并统计文件数量
+                    folder_path = self.right_model.filePath(source_index)
+                    if not folder_path or not Path(folder_path).is_dir():
+                        continue
+                        
+                    # 统计文件夹中的文件数量（不包括子文件夹）
+                    file_count = self._count_files_in_folder(folder_path)
+                    
+                    if file_count > 0 and file_count < 30:
+                        # 立即展开这个文件夹
+                        self.right_tree.expand(child_index)
+                        print(f"自动展开文件夹: {Path(folder_path).name} (包含 {file_count} 个文件)")
+                        
+                        # 记录需要递归处理的文件夹路径
+                        folders_to_process.append((folder_path, current_depth + 1))
+                        
+                    elif file_count >= 30:
+                        print(f"跳过展开大文件夹: {Path(folder_path).name} (包含 {file_count} 个文件)")
+                        
+                except Exception as e:
+                    print(f"处理单个文件夹时出错: {e}")
+                    continue
+            
+            # 异步递归处理子文件夹，使用路径而不是索引
+            if folders_to_process:
+                QTimer.singleShot(150, lambda: self._process_folders_batch(folders_to_process, max_depth))
+                    
+        except Exception as e:
+            print(f"递归展开文件夹失败: {e}")
+    
+    def _process_folders_batch(self, folders_info, max_depth):
+        """批量处理文件夹列表"""
+        try:
+            for folder_path, depth in folders_info:
+                if depth >= max_depth:
+                    continue
+                    
+                try:
+                    # 重新获取索引，确保有效性
+                    source_index = self.right_model.index(folder_path)
+                    if not source_index.isValid():
+                        continue
+                        
+                    proxy_index = self.right_proxy.mapFromSource(source_index)
+                    if not proxy_index.isValid():
+                        continue
+                        
+                    # 递归处理这个文件夹
+                    self._expand_folders_recursive(proxy_index, depth, max_depth)
+                    
+                except Exception as e:
+                    print(f"批量处理文件夹 {folder_path} 失败: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"批量处理文件夹失败: {e}")
+    
+    def _count_files_in_folder(self, folder_path):
+        """统计文件夹中的文件数量（不包括子文件夹）"""
+        try:
+            folder = Path(folder_path)
+            if not folder.is_dir():
+                return 0
+                
+            file_count = 0
+            for item in folder.iterdir():
+                if item.is_file():
+                    file_count += 1
+                    # 如果文件数量已经超过50，提前返回
+                    if file_count >= 30:
+                        break
+                        
+            return file_count
+            
+        except (PermissionError, OSError) as e:
+            print(f"无法访问文件夹 {folder_path}: {e}")
+            return 0
+        except Exception as e:
+            print(f"统计文件数量失败 {folder_path}: {e}")
+            return 0
 
     def format_file_size(self, size_bytes):
         """格式化文件大小，使用更简洁的实现"""
@@ -1403,9 +1594,23 @@ class FileOrganizer(QWidget):
                 self.right_proxy.clear_included()
                 
             # 设置右侧根到共同父目录
-            self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(target_dir)))
-            self._empty_dir = None
-            self.right_proxy.invalidate()
+            try:
+                root_source_index = self.right_model.index(target_dir)
+                if root_source_index.isValid():
+                    proxy_root_index = self.right_proxy.mapFromSource(root_source_index)
+                    if proxy_root_index.isValid():
+                        self.right_tree.setRootIndex(proxy_root_index)
+                        self._empty_dir = None
+                        self.right_proxy.invalidate()
+                        
+                        # 自动展开文件数量少于50的文件夹（使用路径而不是索引）
+                        QTimer.singleShot(300, lambda: self._safe_auto_expand_small_folders(target_dir))
+                    else:
+                        print(f"无效的代理索引: {target_dir}")
+                else:
+                    print(f"无效的源索引: {target_dir}")
+            except Exception as e:
+                print(f"设置右侧根目录失败: {e}")
 
 
     def remove_from_right(self):
