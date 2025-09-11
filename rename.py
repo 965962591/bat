@@ -1334,6 +1334,9 @@ class FileOrganizer(QWidget):
                     print(f"处理路径失败 {p}: {e}")
                     continue
 
+            # 计算传入的文件总数量（用于判断是否自动展开）
+            total_input_files = len(files)
+            
             # 计算共同父目录
             def common_parent(dir_list):
                 if not dir_list:
@@ -1386,8 +1389,8 @@ class FileOrganizer(QWidget):
                 self.right_tree.setRootIndex(proxy_root_index)
                 self._empty_dir = None
                 
-                # 功能1：自动展开文件数量少于50的文件夹（使用路径而不是索引）
-                QTimer.singleShot(300, lambda: self._safe_auto_expand_small_folders(target_dir))
+                # 功能1：基于传入文件数量判断是否自动展开（少于30个文件时展开）
+                QTimer.singleShot(300, lambda: self._safe_auto_expand_small_folders(target_dir, total_input_files))
                 
             except Exception as e:
                 print(f"设置右侧根目录失败: {e}")
@@ -1403,7 +1406,7 @@ class FileOrganizer(QWidget):
         except Exception as e:
             print(f"安全展开路径失败: {e}")
     
-    def _safe_auto_expand_small_folders(self, target_dir):
+    def _safe_auto_expand_small_folders(self, target_dir, input_file_count=0):
         """安全地自动展开小文件夹"""
         try:
             if not target_dir or not Path(target_dir).is_dir():
@@ -1418,25 +1421,23 @@ class FileOrganizer(QWidget):
             if not proxy_root_index.isValid():
                 return
                 
-            self._auto_expand_small_folders(proxy_root_index)
+            self._auto_expand_small_folders(proxy_root_index, input_file_count)
             
         except Exception as e:
             print(f"安全自动展开失败: {e}")
 
-    def _auto_expand_small_folders(self, parent_index):
-        """自动展开文件数量少于30的文件夹（基于所有文件夹的总文件数量）"""
+    def _auto_expand_small_folders(self, parent_index, input_file_count=0):
+        """基于传入的文件数量判断是否自动展开文件夹"""
         try:
             if not parent_index.isValid():
                 return
                 
-            # 先统计所有文件夹的总文件数量
-            total_file_count = self._count_total_files_in_tree(parent_index)
-            
-            # 如果总文件数量少于30，则展开所有文件夹
-            if total_file_count < 30:
+            # 基于传入的文件数量判断是否展开
+            if input_file_count < 30:
+                print(f"传入文件数量为 {input_file_count}，少于30个，自动展开文件夹")
                 self._expand_folders_recursive(parent_index, max_depth=3)  # 限制递归深度为3层
             else:
-                print(f"总文件数量为 {total_file_count}，超过30个，不自动展开")
+                print(f"传入文件数量为 {input_file_count}，超过30个，不自动展开")
             
         except Exception as e:
             print(f"自动展开文件夹失败: {e}")
@@ -1539,48 +1540,7 @@ class FileOrganizer(QWidget):
             print(f"统计文件数量失败 {folder_path}: {e}")
             return 0
     
-    def _count_total_files_in_tree(self, parent_index):
-        """递归统计树形结构中所有文件夹的总文件数量"""
-        total_count = 0
-        try:
-            if not parent_index.isValid():
-                return 0
-                
-            # 统计当前层级的所有文件夹
-            row_count = self.right_proxy.rowCount(parent_index)
-            for row in range(row_count):
-                try:
-                    child_index = self.right_proxy.index(row, 0, parent_index)
-                    if not child_index.isValid():
-                        continue
-                        
-                    source_index = self.right_proxy.mapToSource(child_index)
-                    if not source_index.isValid():
-                        continue
-                        
-                    if self.right_model.isDir(source_index):
-                        # 这是一个文件夹，统计其中的文件数量
-                        folder_path = self.right_model.filePath(source_index)
-                        if folder_path and Path(folder_path).is_dir():
-                            folder_file_count = self._count_files_in_folder(folder_path)
-                            total_count += folder_file_count
-                            
-                            # 递归统计子文件夹
-                            sub_count = self._count_total_files_in_tree(child_index)
-                            total_count += sub_count
-                    else:
-                        # 这是一个文件，计入总数
-                        total_count += 1
-                        
-                except Exception as e:
-                    print(f"统计单个项目时出错: {e}")
-                    continue
-                    
-            return total_count
-            
-        except Exception as e:
-            print(f"统计总文件数量失败: {e}")
-            return 0
+
 
     def format_file_size(self, size_bytes):
         """格式化文件大小，使用更简洁的实现"""
@@ -1614,6 +1574,9 @@ class FileOrganizer(QWidget):
                 normalized_dirs.append(str(path_obj.parent))
             else:
                 normalized_dirs.append(str(path_obj))
+        
+        # 计算选中的文件数量（用于判断是否自动展开）
+        selected_file_count = len([p for p in paths if Path(p).is_file()])
         
         # 计算共同父目录
         unique_dirs = list(dict.fromkeys(normalized_dirs))
@@ -1651,8 +1614,8 @@ class FileOrganizer(QWidget):
                         self._empty_dir = None
                         self.right_proxy.invalidate()
                         
-                        # 自动展开文件数量少于50的文件夹（使用路径而不是索引）
-                        QTimer.singleShot(300, lambda: self._safe_auto_expand_small_folders(target_dir))
+                        # 基于选中的文件数量判断是否自动展开
+                        QTimer.singleShot(300, lambda: self._safe_auto_expand_small_folders(target_dir, selected_file_count))
                     else:
                         print(f"无效的代理索引: {target_dir}")
                 else:
