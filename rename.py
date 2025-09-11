@@ -25,10 +25,9 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QSplitter,
     QFrame,
-    QScrollArea,
     QStatusBar,
 )
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex
+from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex, QAbstractNativeEventFilter
 from PyQt5.QtGui import QKeySequence, QIcon, QFont
 from PyQt5.QtWidgets import QShortcut, QFileSystemModel
 from PyQt5.QtCore import QSortFilterProxyModel
@@ -144,9 +143,12 @@ class PowerRenameDialog(QWidget):
             return [name.lower()]
 
     def initUI(self):
-        self.setWindowTitle("PowerRename - 查找替换")
-        self.resize(1000, 700)
+        self.setWindowTitle("PowerRename")
+        self.resize(1200, 700)
         self.setMinimumSize(800, 600)
+        
+        # 设置窗口置顶
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         
         # 设置图标
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
@@ -212,7 +214,7 @@ class PowerRenameDialog(QWidget):
         replace_layout = QVBoxLayout()
         
         self.replace_input = QLineEdit()
-        self.replace_input.setPlaceholderText("输入替换文本")
+        self.replace_input.setPlaceholderText("# 数字, $p 文件夹名, $$p两级文件夹")
         self.replace_input.textChanged.connect(self.update_preview)
         replace_layout.addWidget(self.replace_input)
         
@@ -335,6 +337,9 @@ class PowerRenameDialog(QWidget):
         self.preview_table.setColumnCount(3)
         self.preview_table.setHorizontalHeaderLabels(["", "原始文件名", "重命名后"])
         
+        # 隐藏行号索引
+        self.preview_table.verticalHeader().hide()
+        
         # 设置表格属性
         header = self.preview_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)  # 复选框列固定宽度
@@ -361,30 +366,38 @@ class PowerRenameDialog(QWidget):
         # 始终显示所有原始文件，但根据查找/替换条件更新重命名预览
         self.preview_data = []
         
+        # 按文件夹分组文件，用于生成序号
+        from collections import defaultdict
+        folder_to_files = defaultdict(list)
         for file_path in sorted(self.file_list, key=self._natural_sort_key):
-            if not os.path.isfile(file_path):
-                continue
+            if os.path.isfile(file_path):
+                folder_path = os.path.dirname(file_path)
+                folder_to_files[folder_path].append(file_path)
+        
+        for folder_path, files in folder_to_files.items():
+            # 按文件夹内的文件顺序生成序号
+            for index, file_path in enumerate(files):
+                original_name = os.path.basename(file_path)
                 
-            original_name = os.path.basename(file_path)
-            folder_path = os.path.dirname(file_path)
-            
-            # 如果没有查找文本，重命名列为空
-            if not search_text:
-                self.preview_data.append((folder_path, original_name, original_name))
-                continue
-            
-            # 根据"应用于"复选框确定处理范围
-            if self.include_files_checkbox.isChecked():
-                # 处理文件名
-                name_part = os.path.splitext(original_name)[0]
-                ext_part = os.path.splitext(original_name)[1]
-                new_name_part = self.perform_replace(name_part, search_text, replace_text)
-                new_name = new_name_part + ext_part
-            else:
-                new_name = original_name
-            
-            # 添加所有文件到预览数据中，包括不修改的文件
-            self.preview_data.append((folder_path, original_name, new_name))
+                # 如果没有查找文本，重命名列为空
+                if not search_text:
+                    self.preview_data.append((folder_path, original_name, original_name))
+                    continue
+                
+                # 根据"应用于"复选框确定处理范围
+                if self.include_files_checkbox.isChecked():
+                    # 处理文件名
+                    name_part = os.path.splitext(original_name)[0]
+                    ext_part = os.path.splitext(original_name)[1]
+                    new_name_part = self.perform_replace_with_special_chars(
+                        name_part, search_text, replace_text, folder_path, index
+                    )
+                    new_name = new_name_part + ext_part
+                else:
+                    new_name = original_name
+                
+                # 添加所有文件到预览数据中，包括不修改的文件
+                self.preview_data.append((folder_path, original_name, new_name))
         
         self.update_preview_table()
         
@@ -471,6 +484,72 @@ class PowerRenameDialog(QWidget):
         
         # 应用文本格式到替换后的文本
         new_text = self.apply_text_format_to_result(new_text)
+        return new_text
+
+    def perform_replace_with_special_chars(self, text, search_text, replace_text, folder_path, index):
+        """执行带有特殊字符的替换操作"""
+        if not search_text:
+            return text
+            
+        # 首先进行普通的查找替换
+        new_text = self.perform_replace(text, search_text, replace_text)
+        
+        # 然后处理替换文本中的特殊字符
+        if replace_text:
+            # 获取文件夹信息
+            folder_name = os.path.basename(folder_path)
+            parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+            
+            # 获取当前日期
+            now = datetime.datetime.now()
+            
+            # 处理日期格式
+            new_text = new_text.replace("$YYYY", str(now.year))  # 年，如 2025
+            new_text = new_text.replace("$MM", f"{now.month:02d}")  # 月，如 02
+            new_text = new_text.replace("$DD", f"{now.day:02d}")  # 日，如 02
+            new_text = new_text.replace("$yyyy", str(now.year))  # 年，如 2025
+            new_text = new_text.replace("$mm", f"{now.month:02d}")  # 月，如 02
+            new_text = new_text.replace("$dd", f"{now.day:02d}")  # 日，如 02
+            
+            # 处理 # 字符 - 数字序号（支持新的格式）
+            import re
+            
+            # 先处理带等号的格式，如 #=1, ##=1, ###=21
+            # 匹配 # 后跟 = 再跟数字的模式，如 #=1, ##=1, ###=21
+            hash_equals_number_pattern = r'#+=(\d+)'
+            matches = re.finditer(hash_equals_number_pattern, new_text)
+            
+            # 从后往前替换，避免位置偏移问题
+            for match in reversed(list(matches)):
+                full_match = match.group()
+                start_number = int(match.group(1))
+                # 计算 # 的数量：总长度 - = 的长度 - 数字的长度
+                hash_count = len(full_match) - 1 - len(match.group(1))
+                
+                # 计算实际数字：index + start_number
+                actual_number = index + start_number
+                number_format = f"{{:0{hash_count}d}}"
+                formatted_number = number_format.format(actual_number)
+                
+                # 替换匹配的部分
+                new_text = new_text[:match.start()] + formatted_number + new_text[match.end():]
+            
+            # 处理纯 # 字符 - 数字序号（原有功能，不包含等号和数字的）
+            # 只处理不包含等号和数字的纯 # 序列
+            pure_hash_pattern = r'#+(?![=0-9])'
+            pure_matches = re.finditer(pure_hash_pattern, new_text)
+            
+            for match in reversed(list(pure_matches)):
+                hash_group = match.group()
+                number_format = f"{{:0{len(hash_group)}d}}"
+                formatted_number = number_format.format(index)
+                new_text = new_text[:match.start()] + formatted_number + new_text[match.end():]
+            
+            # 处理 $p 和 $$p - 文件夹名
+            new_text = new_text.replace("$$p", f"{parent_folder_name}_{folder_name}")
+            new_text = new_text.replace("$$P", f"{parent_folder_name}_{folder_name}")
+            new_text = new_text.replace("$p", folder_name)
+        
         return new_text
         
     def apply_text_format_to_result(self, text):
