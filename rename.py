@@ -3,34 +3,12 @@ import os
 import tempfile
 import re
 import datetime
-from PyQt5.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QPushButton,
-    QMessageBox,
-    QFileDialog,
-    QLabel,
-    QDialog,
-    QTableWidget,
-    QTableWidgetItem,
-    QComboBox,
-    QHeaderView,
-    QCheckBox,
-    QMenu,
-    QAction,
-    QTreeView,
-    QGroupBox,
-    QSplitter,
-    QFrame,
-    QStatusBar,
-)
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex, QAbstractNativeEventFilter, QEvent, QTimer
-from PyQt5.QtGui import QKeySequence, QIcon, QFont
-from PyQt5.QtWidgets import QShortcut, QFileSystemModel
-from PyQt5.QtCore import QSortFilterProxyModel
+from collections import defaultdict
+from pathlib import Path
+
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
 
 
 class ExcludeFilterProxyModel(QSortFilterProxyModel):
@@ -53,14 +31,8 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
         self.invalidateFilter()
 
     def set_included(self, paths):
-        # 归一化路径，避免分隔符大小写差异
-        normed = set()
-        for p in (paths or []):
-            try:
-                normed.add(os.path.normcase(os.path.normpath(p)))
-            except Exception:
-                normed.add(p)
-        self.included_paths = normed
+        # 使用Path对象进行路径规范化
+        self.included_paths = {str(Path(p).resolve()) for p in (paths or []) if p}
         self.invalidateFilter()
 
     def clear_included(self):
@@ -68,50 +40,40 @@ class ExcludeFilterProxyModel(QSortFilterProxyModel):
         self.invalidateFilter()
 
     def remove_from_included(self, paths):
-        changed = False
-        for p in (paths or []):
-            try:
-                key = os.path.normcase(os.path.normpath(p))
-            except Exception:
-                key = p
-            if key in self.included_paths:
-                self.included_paths.discard(key)
-                changed = True
-        if changed:
+        if not paths:
+            return
+        to_remove = {str(Path(p).resolve()) for p in paths if p}
+        if self.included_paths & to_remove:
+            self.included_paths -= to_remove
             self.invalidateFilter()
 
     def filterAcceptsRow(self, source_row, source_parent):
         if self.hide_all:
             return False
+        
         source_index = self.sourceModel().index(source_row, 0, source_parent)
         if not source_index.isValid():
             return True
-        model = self.sourceModel()
+            
         try:
-            file_path = model.filePath(source_index)
+            file_path = str(Path(self.sourceModel().filePath(source_index)).resolve())
         except Exception:
             return True
-        # 统一规范化
-        try:
-            file_path_norm = os.path.normcase(os.path.normpath(file_path))
-        except Exception:
-            file_path_norm = file_path
-        # 先应用排除规则（排除优先于包含）
-        for p in self.excluded_paths:
-            if file_path_norm == p or file_path_norm.startswith(p + os.sep):
+            
+        # 检查排除列表
+        for excluded in self.excluded_paths:
+            if file_path == excluded or file_path.startswith(excluded + os.sep):
                 return False
-        # 如果设置了包含白名单，仅显示白名单文件与其祖先目录
+                
+        # 检查包含列表
         if self.included_paths:
-            for p in self.included_paths:
-                if file_path_norm == p:
-                    return True
-                # file_path 是 p 的祖先（目录）→ 显示祖先链以便展开到白名单项
-                if p.startswith(file_path_norm + os.sep):
-                    return True
-                # file_path 是 p 的后代（当 p 为目录时）→ 显示所选目录的所有子项
-                if file_path_norm.startswith(p + os.sep):
+            for included in self.included_paths:
+                if (file_path == included or 
+                    included.startswith(file_path + os.sep) or 
+                    file_path.startswith(included + os.sep)):
                     return True
             return False
+            
         return True
 
 
@@ -128,19 +90,10 @@ class PowerRenameDialog(QWidget):
         self.initUI()
         
     def _natural_sort_key(self, path_or_name):
-        """返回用于自然排序的键，使 '1' < '2' < '10'。
-
-        仅对末级文件名进行分段；非数字段使用小写比较以稳定排序。
-        """
-        try:
-            name = os.path.basename(path_or_name)
-        except Exception:
-            name = str(path_or_name)
-        try:
-            parts = re.split(r"(\d+)", name)
-            return [int(p) if p.isdigit() else p.lower() for p in parts]
-        except Exception:
-            return [name.lower()]
+        """自然排序键，使用Path对象简化处理"""
+        name = Path(path_or_name).name
+        parts = re.split(r'(\d+)', name)
+        return [int(p) if p.isdigit() else p.lower() for p in parts]
 
     def initUI(self):
         self.setWindowTitle("PowerRename")
@@ -367,17 +320,17 @@ class PowerRenameDialog(QWidget):
         self.preview_data = []
         
         # 按文件夹分组文件，用于生成序号
-        from collections import defaultdict
         folder_to_files = defaultdict(list)
         for file_path in sorted(self.file_list, key=self._natural_sort_key):
-            if os.path.isfile(file_path):
-                folder_path = os.path.dirname(file_path)
+            if Path(file_path).is_file():
+                folder_path = str(Path(file_path).parent)
                 folder_to_files[folder_path].append(file_path)
         
         for folder_path, files in folder_to_files.items():
             # 按文件夹内的文件顺序生成序号
             for index, file_path in enumerate(files):
-                original_name = os.path.basename(file_path)
+                path_obj = Path(file_path)
+                original_name = path_obj.name
                 
                 # 如果没有查找文本，重命名列为空
                 if not search_text:
@@ -386,9 +339,9 @@ class PowerRenameDialog(QWidget):
                 
                 # 根据"应用于"复选框确定处理范围
                 if self.include_files_checkbox.isChecked():
-                    # 同时处理文件名与扩展名
-                    name_part = os.path.splitext(original_name)[0]
-                    ext_part = os.path.splitext(original_name)[1]
+                    # 使用Path对象处理文件名和扩展名
+                    name_part = path_obj.stem
+                    ext_part = path_obj.suffix
                     new_name_part = self.perform_replace_with_special_chars(
                         name_part, search_text, replace_text, folder_path, index
                     )
@@ -409,11 +362,12 @@ class PowerRenameDialog(QWidget):
         
         # 显示所有原始文件，包括重命名后的文件
         for file_path in sorted(self.file_list, key=self._natural_sort_key):
-            if not os.path.isfile(file_path):
+            path_obj = Path(file_path)
+            if not path_obj.is_file():
                 continue
                 
-            original_name = os.path.basename(file_path)
-            folder_path = os.path.dirname(file_path)
+            original_name = path_obj.name
+            folder_path = str(path_obj.parent)
             
             # 显示原始文件名，用于程序启动时显示
             self.preview_data.append((folder_path, original_name, original_name))
@@ -433,6 +387,8 @@ class PowerRenameDialog(QWidget):
         elif button == self.uppercase_radio:
             return text.upper()
         elif button == self.capitalize_radio:
+            # 对于首字母大写，我们需要确保每个单词的首字母都大写
+            # 而不仅仅是整个字符串的第一个字符
             return text.capitalize()
         elif button == self.title_radio:
             return text.title()
@@ -443,24 +399,27 @@ class PowerRenameDialog(QWidget):
         if not search_text:
             return text
             
+        # 首先对替换文本应用格式化
+        formatted_replace_text = self.apply_text_format_to_result(replace_text)
+        
         try:
             if self.regex_checkbox.isChecked():
                 # 使用正则表达式
                 flags = 0 if self.case_sensitive_checkbox.isChecked() else re.IGNORECASE
                 if self.match_all_checkbox.isChecked():
-                    new_text = re.sub(search_text, replace_text, text, flags=flags)
+                    new_text = re.sub(search_text, formatted_replace_text, text, flags=flags)
                 else:
-                    new_text = re.sub(search_text, replace_text, text, count=1, flags=flags)
+                    new_text = re.sub(search_text, formatted_replace_text, text, count=1, flags=flags)
             else:
                 # 普通文本替换
                 if self.case_sensitive_checkbox.isChecked():
                     if self.match_all_checkbox.isChecked():
-                        new_text = text.replace(search_text, replace_text)
+                        new_text = text.replace(search_text, formatted_replace_text)
                     else:
-                        new_text = text.replace(search_text, replace_text, 1)
+                        new_text = text.replace(search_text, formatted_replace_text, 1)
                 else:
                     # 不区分大小写 - 使用简单的不区分大小写替换
-                    new_text = self.case_insensitive_replace(text, search_text, replace_text, self.match_all_checkbox.isChecked())
+                    new_text = self.case_insensitive_replace(text, search_text, formatted_replace_text, self.match_all_checkbox.isChecked())
         except Exception as e:
             print(f"替换错误: {e}")
             print(f"查找文本: '{search_text}'")
@@ -473,19 +432,17 @@ class PowerRenameDialog(QWidget):
             # 如果正则表达式失败，回退到普通字符串替换
             try:
                 if self.case_sensitive_checkbox.isChecked():
-                    new_text = text.replace(search_text, replace_text)
+                    if self.match_all_checkbox.isChecked():
+                        new_text = text.replace(search_text, formatted_replace_text)
+                    else:
+                        new_text = text.replace(search_text, formatted_replace_text, 1)
                 else:
-                    # 不区分大小写的简单替换
-                    new_text = text.replace(search_text.lower(), replace_text.lower())
-                    # 如果小写替换没有效果，尝试原样替换
-                    if new_text == text:
-                        new_text = text.replace(search_text, replace_text)
+                    # 使用改进的不区分大小写替换
+                    new_text = self.case_insensitive_replace(text, search_text, formatted_replace_text, self.match_all_checkbox.isChecked())
             except Exception as e2:
                 print(f"回退替换也失败: {e2}")
                 return text
         
-        # 应用文本格式到替换后的文本
-        new_text = self.apply_text_format_to_result(new_text)
         return new_text
 
     def perform_replace_with_special_chars(self, text, search_text, replace_text, folder_path, index):
@@ -498,20 +455,26 @@ class PowerRenameDialog(QWidget):
         
         # 然后处理替换文本中的特殊字符
         if replace_text:
-            # 获取文件夹信息
-            folder_name = os.path.basename(folder_path)
-            parent_folder_name = os.path.basename(os.path.dirname(folder_path))
+            # 使用Path对象获取文件夹信息
+            folder_path_obj = Path(folder_path)
+            folder_name = folder_path_obj.name
+            parent_folder_name = folder_path_obj.parent.name
             
             # 获取当前日期
             now = datetime.datetime.now()
             
-            # 处理日期格式
-            new_text = new_text.replace("$YYYY", str(now.year))  # 年，如 2025
-            new_text = new_text.replace("$MM", f"{now.month:02d}")  # 月，如 02
-            new_text = new_text.replace("$DD", f"{now.day:02d}")  # 日，如 02
-            new_text = new_text.replace("$yyyy", str(now.year))  # 年，如 2025
-            new_text = new_text.replace("$mm", f"{now.month:02d}")  # 月，如 02
-            new_text = new_text.replace("$dd", f"{now.day:02d}")  # 日，如 02
+            # 处理日期格式 - 使用字典简化替换
+            date_replacements = {
+                "$YYYY": str(now.year),
+                "$MM": f"{now.month:02d}",
+                "$DD": f"{now.day:02d}",
+                "$yyyy": str(now.year),
+                "$mm": f"{now.month:02d}",
+                "$dd": f"{now.day:02d}"
+            }
+            
+            for old, new in date_replacements.items():
+                new_text = new_text.replace(old, new)
             
             # 处理 # 字符 - 数字序号（支持新的格式）
             import re
@@ -553,7 +516,130 @@ class PowerRenameDialog(QWidget):
             new_text = new_text.replace("$p", folder_name)
         
         return new_text
+    
+    def _should_rename_file(self, old_name, new_name):
+        """判断是否需要重命名文件，考虑文件系统的大小写敏感性"""
+        if old_name == new_name:
+            return False
         
+        # 在Windows等不区分大小写的文件系统上，如果只是大小写不同，也需要重命名
+        # 但需要特殊处理以避免冲突
+        if old_name.lower() == new_name.lower():
+            # 只有大小写不同，在不区分大小写的文件系统上仍然需要重命名
+            return True
+        
+        # 检查新文件名是否有效（避免 Windows 保留名称等）
+        if self._is_invalid_filename(new_name):
+            print(f"无效的文件名: {new_name}")
+            return False
+        
+        return True
+    
+    def _is_invalid_filename(self, filename):
+        """检查文件名是否在 Windows 上无效"""
+        if not filename or filename.strip() == "":
+            return True
+            
+        # Windows 保留名称
+        reserved_names = {
+            'CON', 'PRN', 'AUX', 'NUL',
+            'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+            'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+        }
+        
+        # 获取文件名（不包含扩展名）进行检查
+        name_without_ext = Path(filename).stem.upper()
+        if name_without_ext in reserved_names:
+            return True
+            
+        # Windows 不允许的字符
+        invalid_chars = '<>:"|?*'
+        if any(char in filename for char in invalid_chars):
+            return True
+            
+        # 文件名不能以点或空格结尾
+        if filename.endswith('.') or filename.endswith(' '):
+            return True
+            
+        # 文件名长度限制（Windows 路径总长度限制为 260 字符）
+        if len(filename) > 255:
+            return True
+            
+        return False
+    
+    def _is_case_sensitive_filesystem(self):
+        """检查当前文件系统是否区分大小写"""
+        try:
+            # 在 Windows 上，文件系统通常不区分大小写
+            import platform
+            if platform.system().lower() == 'windows':
+                return False
+            
+            # 对于其他系统，可以通过创建测试文件来检查
+            # 这里简化处理，假设非 Windows 系统区分大小写
+            return True
+        except:
+            # 默认假设不区分大小写（更安全）
+            return False
+    
+    def _safe_rename_file(self, old_path, new_path, old_name, new_name):
+        """安全地重命名文件，处理大小写敏感的情况"""
+        if not old_path.exists():
+            print(f"原文件不存在: {old_path}")
+            return False
+        
+        # 检查是否只是大小写不同
+        if old_name.lower() == new_name.lower() and old_name != new_name:
+            # 只有大小写不同，需要使用临时文件名避免冲突
+            return self._rename_case_only(old_path, new_path, old_name, new_name)
+        
+        # 检查目标文件是否已存在（在 Windows 上不区分大小写）
+        if new_path.exists():
+            # 在 Windows 上，即使大小写不同，如果文件已存在也不能重命名
+            if old_path.resolve() != new_path.resolve():
+                print(f"目标文件已存在: {new_path}")
+                return False
+        
+        # 普通重命名
+        try:
+            old_path.rename(new_path)
+            return True
+        except OSError as e:
+            # 处理 Windows 特有的错误
+            if "already exists" in str(e).lower() or "cannot create" in str(e).lower():
+                print(f"文件已存在或无法创建: {new_path}")
+            else:
+                print(f"重命名失败: {e}")
+            return False
+        except Exception as e:
+            print(f"重命名失败: {e}")
+            return False
+    
+    def _rename_case_only(self, old_path, new_path, old_name, new_name):
+        """处理只有大小写不同的重命名"""
+        try:
+            # 使用临时文件名避免冲突
+            temp_name = f"_temp_rename_{old_name}_{datetime.datetime.now().microsecond}"
+            temp_path = old_path.parent / temp_name
+            
+            # 先重命名到临时文件
+            old_path.rename(temp_path)
+            
+            # 再重命名到目标文件
+            temp_path.rename(new_path)
+            
+            print(f"大小写重命名成功: {old_name} -> {new_name}")
+            return True
+        except Exception as e:
+            print(f"大小写重命名失败: {e}")
+            # 尝试恢复原文件名
+            try:
+                if temp_path.exists():
+                    temp_path.rename(old_path)
+            except:
+                pass
+            return False
+
     def apply_text_format_to_result(self, text):
         """对重命名结果应用文本格式"""
         # 获取当前选中的格式按钮
@@ -564,32 +650,39 @@ class PowerRenameDialog(QWidget):
         return self.format_text(text, selected_button)
         
     def case_insensitive_replace(self, text, search_text, replace_text, replace_all=True):
-        """不区分大小写的字符串替换"""
+        """不区分大小写的字符串替换，使用正则表达式优化"""
         if not search_text:
             return text
             
-        result = text
-        search_lower = search_text.lower()
-        text_lower = text.lower()
-        
-        if replace_all:
-            # 替换所有匹配项
-            start = 0
-            while True:
-                pos = text_lower.find(search_lower, start)
-                if pos == -1:
-                    break
-                # 找到匹配位置，进行替换
-                result = result[:pos] + replace_text + result[pos + len(search_text):]
-                text_lower = result.lower()  # 更新小写版本
-                start = pos + len(replace_text)
-        else:
-            # 只替换第一个匹配项
-            pos = text_lower.find(search_lower)
-            if pos != -1:
-                result = result[:pos] + replace_text + result[pos + len(search_text):]
-                
-        return result
+        try:
+            flags = re.IGNORECASE
+            count = 0 if replace_all else 1
+            # 转义特殊字符以避免正则表达式错误
+            escaped_search = re.escape(search_text)
+            return re.sub(escaped_search, replace_text, text, count=count, flags=flags)
+        except Exception as e:
+            print(f"不区分大小写替换失败: {e}")
+            # 回退到简单的字符串替换
+            try:
+                if replace_all:
+                    # 使用循环进行不区分大小写的全部替换
+                    result = text
+                    search_lower = search_text.lower()
+                    while True:
+                        pos = result.lower().find(search_lower)
+                        if pos == -1:
+                            break
+                        result = result[:pos] + replace_text + result[pos + len(search_text):]
+                    return result
+                else:
+                    # 只替换第一个匹配项
+                    pos = text.lower().find(search_text.lower())
+                    if pos != -1:
+                        return text[:pos] + replace_text + text[pos + len(search_text):]
+                    return text
+            except Exception as e2:
+                print(f"回退替换也失败: {e2}")
+                return text
         
     def on_checkbox_changed(self):
         """复选框状态变化时的处理"""
@@ -759,55 +852,101 @@ class PowerRenameDialog(QWidget):
         try:
             success_count = 0
             failed_files = []
-            actual_rename_count = 0
+            invalid_files = []
             
-            print(f"开始重命名，共 {len(selected_files)} 个选中文件")
-            
+            # 过滤出需要重命名的文件，考虑文件系统的大小写敏感性
+            files_to_rename = []
             for folder, old_name, new_name in selected_files:
-                # 跳过文件名相同的文件（不需要重命名）
-                if old_name == new_name:
-                    print(f"跳过相同文件名: {old_name}")
+                # 检查新文件名是否有效
+                if self._is_invalid_filename(new_name):
+                    invalid_files.append(f"{old_name} -> {new_name}: 无效的文件名")
                     continue
                     
-                actual_rename_count += 1
-                old_path = os.path.join(folder, old_name)
-                new_path = os.path.join(folder, new_name)
+                if self._should_rename_file(old_name, new_name):
+                    files_to_rename.append((folder, old_name, new_name))
+            
+            # 如果有无效文件名，先提示用户
+            if invalid_files:
+                invalid_msg = "\n".join(invalid_files[:10])  # 最多显示10个
+                if len(invalid_files) > 10:
+                    invalid_msg += f"\n... 还有 {len(invalid_files) - 10} 个无效文件名"
+                
+                reply = QMessageBox.question(self, "发现无效文件名", 
+                    f"发现 {len(invalid_files)} 个无效文件名:\n\n{invalid_msg}\n\n是否继续重命名其他文件？",
+                    QMessageBox.Yes | QMessageBox.No)
+                
+                if reply == QMessageBox.No:
+                    return
+            
+            if not files_to_rename:
+                QMessageBox.information(self, "提示", "没有需要重命名的文件")
+                return
+            
+            print(f"开始重命名，共 {len(files_to_rename)} 个文件需要重命名")
+            
+            # 创建进度对话框
+            progress = QProgressDialog("正在重命名文件...", "取消", 0, len(files_to_rename), self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            
+            for i, (folder, old_name, new_name) in enumerate(files_to_rename):
+                # 更新进度
+                progress.setValue(i)
+                progress.setLabelText(f"正在重命名: {old_name}")
+                
+                # 检查用户是否取消
+                if progress.wasCanceled():
+                    break
+                
+                old_path = Path(folder) / old_name
+                new_path = Path(folder) / new_name
                 
                 print(f"尝试重命名: {old_path} -> {new_path}")
-                print(f"原文件存在: {os.path.exists(old_path)}")
-                print(f"新文件存在: {os.path.exists(new_path)}")
                 
-                if os.path.exists(old_path):
-                    if not os.path.exists(new_path):
-                        try:
-                            os.rename(old_path, new_path)
-                            success_count += 1
-                            print(f"重命名成功: {old_name} -> {new_name}")
-                        except Exception as e:
-                            print(f"重命名失败: {e}")
-                            failed_files.append(f"{old_name}: {str(e)}")
+                try:
+                    success = self._safe_rename_file(old_path, new_path, old_name, new_name)
+                    if success:
+                        success_count += 1
+                        print(f"重命名成功: {old_name} -> {new_name}")
                     else:
-                        # 目标文件已存在，直接提示失败
-                        print(f"目标文件已存在: {new_path}")
-                        failed_files.append(f"{old_name}: 目标文件已存在")
-                else:
-                    print(f"原文件不存在: {old_path}")
-                    failed_files.append(f"{old_name}: 原文件不存在")
+                        failed_files.append(f"{old_name}: 重命名失败")
+                except Exception as e:
+                    print(f"重命名失败: {e}")
+                    failed_files.append(f"{old_name}: {str(e)}")
+            
+            progress.setValue(len(files_to_rename))
+            progress.close()
                     
             # 显示重命名结果
-            if failed_files:
-                QMessageBox.warning(self, "重命名完成", f"选中 {len(selected_files)} 个文件\n实际需要重命名 {actual_rename_count} 个文件\n成功重命名 {success_count} 个文件\n失败 {len(failed_files)} 个文件")
-            else:
-                pass
+            result_msg = f"重命名完成!\n\n"
+            result_msg += f"需要重命名: {len(files_to_rename)} 个文件\n"
+            result_msg += f"成功重命名: {success_count} 个文件\n"
             
-            print(f"重命名完成: 选中 {len(selected_files)} 个，实际重命名 {actual_rename_count} 个，成功 {success_count} 个，失败 {len(failed_files)} 个")
+            if invalid_files:
+                result_msg += f"无效文件名: {len(invalid_files)} 个文件\n"
+            
+            if failed_files:
+                result_msg += f"重命名失败: {len(failed_files)} 个文件\n"
+                
+                # 如果有失败的文件，显示详细信息
+                if len(failed_files) <= 5:
+                    result_msg += "\n失败详情:\n" + "\n".join(failed_files)
+                else:
+                    result_msg += f"\n失败详情（前5个）:\n" + "\n".join(failed_files[:5])
+                    result_msg += f"\n... 还有 {len(failed_files) - 5} 个失败"
+                
+                QMessageBox.warning(self, "重命名完成", result_msg)
+            else:
+                QMessageBox.information(self, "重命名完成", result_msg)
+            
+            print(f"重命名完成: 需要重命名 {len(files_to_rename)} 个，成功 {success_count} 个，失败 {len(failed_files)} 个")
                 
             # 重命名完成后重新获取文件列表并显示
             self.refresh_file_list_after_rename()
             self.update_preview()  # 使用update_preview而不是show_original_files
             
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"重命名失败: {str(e)}")
+            QMessageBox.critical(self, "错误", f"重命名过程中发生错误: {str(e)}")
             print(f"重命名异常: {e}")
             
     def update_file_list(self):
@@ -839,22 +978,13 @@ class PowerRenameDialog(QWidget):
         
     def refresh_file_list_after_rename(self):
         """重命名后刷新文件列表"""
-        # 重新扫描完整文件夹内容
+        # 使用Path对象重新扫描文件夹
+        folders = {Path(file_path).parent for file_path in self.file_list}
+        
         new_file_list = []
-        
-        # 从原始文件列表中获取所有目录
-        folders = set()
-        for file_path in self.file_list:
-            folder = os.path.dirname(file_path)
-            folders.add(folder)
-        
-        # 扫描每个目录中的所有文件
         for folder in folders:
-            if os.path.exists(folder):
-                for filename in os.listdir(folder):
-                    full_path = os.path.join(folder, filename)
-                    if os.path.isfile(full_path):
-                        new_file_list.append(full_path)
+            if folder.exists():
+                new_file_list.extend([str(p) for p in folder.iterdir() if p.is_file()])
         
         self.file_list = new_file_list
         print(f"重命名后刷新文件列表: {len(self.file_list)} 个文件")
@@ -1160,40 +1290,32 @@ class FileOrganizer(QWidget):
         """将右侧视图设置为显示指定路径（支持文件/文件夹），并建立白名单。"""
         if not paths:
             return
-        # 归一化并区分文件与目录
+            
+        # 使用Path对象归一化并区分文件与目录
         files = []
         dirs = []
         for p in dict.fromkeys(paths):
-            try:
-                if os.path.isfile(p):
-                    files.append(p)
-                elif os.path.isdir(p):
-                    dirs.append(p)
-            except Exception:
-                continue
+            path_obj = Path(p)
+            if path_obj.is_file():
+                files.append(str(path_obj))
+            elif path_obj.is_dir():
+                dirs.append(str(path_obj))
 
         # 计算共同父目录
         def common_parent(dir_list):
-            parts = [os.path.abspath(d).split(os.sep) for d in dir_list if os.path.isdir(d)]
-            if not parts:
+            if not dir_list:
                 return None
-            min_len = min(len(x) for x in parts)
-            prefix = []
-            for i in range(min_len):
-                token = parts[0][i]
-                if all(x[i] == token for x in parts):
-                    prefix.append(token)
-                else:
-                    break
-            return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
+            paths = [Path(d).resolve() for d in dir_list]
+            try:
+                common_path_str = os.path.commonpath([str(p) for p in paths])
+                return str(Path(common_path_str).resolve())
+            except ValueError:
+                return str(paths[0].parent)
 
-        target_dir = None
         candidate_dirs = list(dirs)
         # 若包含文件，以其父目录参与共同父目录计算
-        for f in files:
-            candidate_dirs.append(os.path.dirname(f))
-        if candidate_dirs:
-            target_dir = common_parent(candidate_dirs) or (candidate_dirs[0] if candidate_dirs else None)
+        candidate_dirs.extend([str(Path(f).parent) for f in files])
+        target_dir = common_parent(candidate_dirs) if candidate_dirs else None
 
         # 重置右侧过滤状态
         self._right_excluded_paths = []
@@ -1209,109 +1331,89 @@ class FileOrganizer(QWidget):
             self.right_proxy.clear_included()
 
         # 设置右侧根目录
-        try:
-            if target_dir and os.path.isdir(target_dir):
+        if target_dir and Path(target_dir).is_dir():
+            try:
                 root_source_index = self.right_model.index(target_dir)
                 self.right_tree.setRootIndex(self.right_proxy.mapFromSource(root_source_index))
                 self._empty_dir = None
-        except Exception:
-            pass
+            except Exception:
+                pass
 
     def format_file_size(self, size_bytes):
-        """格式化文件大小"""
+        """格式化文件大小，使用更简洁的实现"""
         if size_bytes == 0:
             return "0 B"
-        size_names = ["B", "KB", "MB", "GB", "TB"]
-        i = 0
-        while size_bytes >= 1024 and i < len(size_names) - 1:
-            size_bytes /= 1024.0
-            i += 1
-        return f"{size_bytes:.1f} {size_names[i]}"
+        
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if size_bytes < 1024:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.1f} PB"
 
     def format_time(self, timestamp):
-        """格式化时间戳"""
-        import time
-        return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+        """格式化时间戳，使用datetime模块"""
+        return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
 
 
     def add_to_right(self):
-        """将左侧当前选中内容加入右侧。
-        规则：
-        - 若选中多个条目：
-          - 若包含文件，右侧根设为这些文件的共同父目录；
-          - 若全是文件夹，若只有一个则设为该文件夹；多个则设为这些文件夹的共同父目录；
-        - 若仅选中一个文件夹，则右侧根=该文件夹。
-        """
+        """将左侧当前选中内容加入右侧"""
         selected = [idx for idx in self.left_tree.selectedIndexes() if idx.column() == 0]
         if not selected:
             return
-        # 转为真实路径
+            
+        # 转为真实路径并使用Path对象处理
         paths = [self.left_model.filePath(idx) for idx in selected]
-        # 如果有文件，使用其父目录
         normalized_dirs = []
+        
         for p in paths:
-            if os.path.isfile(p):
-                normalized_dirs.append(os.path.dirname(p))
+            path_obj = Path(p)
+            if path_obj.is_file():
+                normalized_dirs.append(str(path_obj.parent))
             else:
-                normalized_dirs.append(p)
+                normalized_dirs.append(str(path_obj))
+        
         # 计算共同父目录
-        def common_parent(dir_list):
-            parts = [os.path.abspath(d).split(os.sep) for d in dir_list if os.path.isdir(d)]
-            if not parts:
-                return None
-            min_len = min(len(x) for x in parts)
-            prefix = []
-            for i in range(min_len):
-                token = parts[0][i]
-                if all(x[i] == token for x in parts):
-                    prefix.append(token)
-                else:
-                    break
-            return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
-        target_dir = None
         unique_dirs = list(dict.fromkeys(normalized_dirs))
         if len(unique_dirs) == 1:
             target_dir = unique_dirs[0]
         else:
-            target_dir = common_parent(unique_dirs)
-        if target_dir and os.path.isdir(target_dir):
+            try:
+                target_dir = os.path.commonpath(unique_dirs)
+            except ValueError:
+                target_dir = unique_dirs[0] if unique_dirs else None
+                
+        if target_dir and Path(target_dir).is_dir():
             # 清空之前的过滤状态并准备新的过滤
             self._right_excluded_paths = []
             self.right_proxy.clear_excluded()
             self.right_proxy.set_hide_all(False)
-            # 根据选择内容设置白名单：
-            # - 若选择了文件：仅显示这些文件（及其祖先目录）
-            # - 否则若选择了文件夹：仅显示这些文件夹及其所有子项
-            selected_files = []
-            selected_dirs = []
-            for p in paths:
-                if os.path.isfile(p):
-                    selected_files.append(p)
-                elif os.path.isdir(p):
-                    selected_dirs.append(p)
+            # 根据选择内容设置白名单
+            selected_files = [p for p in paths if Path(p).is_file()]
+            selected_dirs = [p for p in paths if Path(p).is_dir()]
+            
             if selected_files:
                 self.right_proxy.set_included(set(selected_files))
             elif selected_dirs:
                 self.right_proxy.set_included(set(selected_dirs))
             else:
                 self.right_proxy.clear_included()
-            # 最后再设置右侧根到共同父目录（确保过滤状态已生效）
+                
+            # 设置右侧根到共同父目录
             self.right_tree.setRootIndex(self.right_proxy.mapFromSource(self.right_model.index(target_dir)))
-            # 取消空目录根
             self._empty_dir = None
-            # 强制刷新与计数
             self.right_proxy.invalidate()
-            # self.update_file_count()
 
 
     def remove_from_right(self):
-        # 只移除右侧选中的条目（通过过滤器隐藏选中的路径）
+        """移除右侧选中的条目"""
         selected_indexes = self.right_tree.selectionModel().selectedIndexes()
         if not selected_indexes:
             return
+            
         # 收集选中项对应的源模型路径
         excluded = list(getattr(self, "_right_excluded_paths", []))
         removed_files = []
+        
         for proxy_index in selected_indexes:
             if proxy_index.column() != 0:
                 continue
@@ -1322,8 +1424,9 @@ class FileOrganizer(QWidget):
             if file_path:
                 excluded.append(file_path)
                 removed_files.append(file_path)
-        # 去重并设置过滤
-        self._right_excluded_paths = [os.path.normcase(os.path.normpath(p)) for p in dict.fromkeys(excluded)]
+                
+        # 使用Path对象规范化路径并去重
+        self._right_excluded_paths = [str(Path(p).resolve()) for p in dict.fromkeys(excluded)]
         self.right_proxy.set_excluded(self._right_excluded_paths)
         # 若当前处于白名单模式（白名单非空），同步从白名单删除被移除的文件
         if hasattr(self, 'right_proxy') and getattr(self.right_proxy, 'included_paths', None):
@@ -1566,19 +1669,10 @@ class FileOrganizer(QWidget):
 
 
     def _natural_sort_key(self, path_or_name):
-        """返回用于自然排序的键，使 '1' < '2' < '10'。
-
-        仅对末级文件名进行分段；非数字段使用小写比较以稳定排序。
-        """
-        try:
-            name = os.path.basename(path_or_name)
-        except Exception:
-            name = str(path_or_name)
-        try:
-            parts = re.split(r"(\d+)", name)
-            return [int(p) if p.isdigit() else p.lower() for p in parts]
-        except Exception:
-            return [name.lower()]
+        """自然排序键，使用Path对象简化处理"""
+        name = Path(path_or_name).name
+        parts = re.split(r'(\d+)', name)
+        return [int(p) if p.isdigit() else p.lower() for p in parts]
 
     def preview_rename(self):
         rename_data = []
@@ -1772,21 +1866,22 @@ class FileOrganizer(QWidget):
 
     def expand_to_path(self, folder_path):
         """自动展开文件树到指定路径"""
-        if not os.path.isdir(folder_path):
+        folder_path_obj = Path(folder_path)
+        if not folder_path_obj.is_dir():
             return
             
         # 获取路径的索引
-        path_index = self.left_model.index(folder_path)
+        path_index = self.left_model.index(str(folder_path_obj))
         if not path_index.isValid():
             return
             
         # 展开路径上的所有父级目录
-        current_path = folder_path
-        while current_path and current_path != os.path.dirname(current_path):
-            parent_index = self.left_model.index(current_path)
+        current_path = folder_path_obj
+        while current_path and current_path != current_path.parent:
+            parent_index = self.left_model.index(str(current_path))
             if parent_index.isValid():
                 self.left_tree.expand(parent_index)
-            current_path = os.path.dirname(current_path)
+            current_path = current_path.parent
 
         # 记录待滚动路径，并在加载完成后滚动
         try:
@@ -1829,7 +1924,9 @@ class FileOrganizer(QWidget):
     def _try_scroll_to(self, path):
         """尝试滚动并选中路径，前提是索引有效。"""
         try:
-            idx = self.left_model.index(path)
+            # 确保路径是字符串格式
+            path_str = str(Path(path))
+            idx = self.left_model.index(path_str)
             if not idx.isValid():
                 return
             # 确保已展开到该节点
@@ -1873,51 +1970,40 @@ class FileOrganizer(QWidget):
         """
         if not paths:
             return
-        # 归一化并区分文件/目录
+            
+        # 使用Path对象归一化并区分文件/目录
         unique_paths = list(dict.fromkeys(paths))
         files = []
         dirs = []
+        
         for p in unique_paths:
-            try:
-                if os.path.isfile(p):
-                    files.append(p)
-                elif os.path.isdir(p):
-                    dirs.append(p)
-            except Exception:
-                continue
+            path_obj = Path(p)
+            if path_obj.is_file():
+                files.append(str(path_obj))
+            elif path_obj.is_dir():
+                dirs.append(str(path_obj))
 
         # 计算共同父目录
-        def common_parent(dir_list):
-            parts = [os.path.abspath(d).split(os.sep) for d in dir_list if os.path.isdir(d)]
-            if not parts:
-                return None
-            min_len = min(len(x) for x in parts)
-            prefix = []
-            for i in range(min_len):
-                token = parts[0][i]
-                if all(x[i] == token for x in parts):
-                    prefix.append(token)
-                else:
-                    break
-            return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
-
         candidate_dirs = list(dirs)
-        for f in files:
-            candidate_dirs.append(os.path.dirname(f))
+        candidate_dirs.extend([str(Path(f).parent) for f in files])
+        
         target_dir = None
         if candidate_dirs:
-            target_dir = common_parent(candidate_dirs) or (candidate_dirs[0] if candidate_dirs else None)
+            try:
+                target_dir = os.path.commonpath(candidate_dirs)
+            except ValueError:
+                target_dir = candidate_dirs[0] if candidate_dirs else None
 
         # 左侧：定位并展开
-        try:
-            if target_dir and os.path.isdir(target_dir):
+        if target_dir and Path(target_dir).is_dir():
+            try:
                 self.expand_to_path(target_dir)
                 # 选中共同父目录，便于用户感知当前位置
                 idx = self.left_model.index(target_dir)
                 if idx.isValid():
                     self.left_tree.setCurrentIndex(idx)
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         # 右侧：打开并建立白名单
         try:
@@ -1930,34 +2016,27 @@ class FileOrganizer(QWidget):
         indexes = selected.indexes()
         if indexes:
             index = indexes[0]
-            file_path = self.left_model.filePath(index)
-            if os.path.isdir(file_path):
+            file_path = Path(self.left_model.filePath(index))
+            
+            if file_path.is_dir():
                 # 更新文件夹输入框，仅更新统计，不自动添加到右侧
-                self.update_folder_count_for_path(file_path)
+                self.update_folder_count_for_path(str(file_path))
             else:
                 # 如果选择的是文件，仅更新输入框为其父目录
-                parent_dir = os.path.dirname(file_path)
-                if os.path.isdir(parent_dir):
-                    self.update_folder_count_for_path(parent_dir)
+                parent_dir = file_path.parent
+                if parent_dir.is_dir():
+                    self.update_folder_count_for_path(str(parent_dir))
 
     def update_folder_count_for_path(self, folder_path):
         """更新指定路径的文件夹数量统计"""
-        if not os.path.isdir(folder_path):
+        folder_path_obj = Path(folder_path)
+        if not folder_path_obj.is_dir():
             return
             
-        folder_count = 0
         try:
-            for item in os.listdir(folder_path):
-                item_path = os.path.join(folder_path, item)
-                if os.path.isdir(item_path):
-                    folder_count += 1
+            folder_count = sum(1 for item in folder_path_obj.iterdir() if item.is_dir())
         except PermissionError:
             folder_count = "无权限访问"
-        
-        # 显示当前选中文件夹的信息
-        # folder_name = os.path.basename(folder_path) or folder_path
-        # self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
-
 
 
 if __name__ == "__main__":
