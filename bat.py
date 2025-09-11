@@ -758,6 +758,136 @@ class LogVerboseMaskApp(QMainWindow):
         install_apk_menu = menubar.addMenu('安装APK')
         self.create_install_apk_menu(install_apk_menu)
 
+        #连接wifi
+        connect_wifi_menu = menubar.addMenu('连接WiFi')
+        self.create_connect_wifi_menu(connect_wifi_menu)
+
+    def create_connect_wifi_menu(self, connect_wifi_menu):
+        """创建连接WiFi菜单（动态加载SSID）"""
+        # 先清空原有菜单项（若有）
+        connect_wifi_menu.clear()
+
+        # 读取WiFi配置
+        wifi_map = self.load_wifi_configs()
+        if not wifi_map:
+            noitem = QAction('未配置WiFi (编辑 app_cache/bat_filepath.ini [WIFI])', self)
+            noitem.setEnabled(False)
+            connect_wifi_menu.addAction(noitem)
+            return
+
+        # 为每个SSID添加菜单项
+        for ssid, pwd in wifi_map.items():
+            action = QAction(ssid, self)
+            masked = '*' * len(pwd) if pwd else ''
+            action.setToolTip(f'SSID: {ssid}  密码: {masked}')
+            action.triggered.connect(lambda checked, s=ssid, p=pwd: self.connect_wifi_with(s, p))
+            connect_wifi_menu.addAction(action)
+
+    def connect_wifi_enable(self):
+        """开启WiFi (svc wifi enable)"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+        try:
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            cmd = f"adb -s {selected_device} shell svc wifi enable"
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo
+            )
+            if result.returncode == 0:
+                QMessageBox.information(self, "成功", "已开启WiFi。")
+            else:
+                QMessageBox.warning(self, "失败", f"开启WiFi失败：\n{(result.stderr or result.stdout or '').strip()}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行失败：\n{str(e)}")
+
+    def connect_wifi_with(self, ssid, password):
+        """连接指定WiFi: cmd wifi connect-network "SSID" wpa2 "PASSWORD""" 
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+        if not ssid:
+            QMessageBox.warning(self, "配置错误", "SSID 不能为空！")
+            return
+        try:
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            # 先尝试开启WiFi（不打断流程，即使失败也继续尝试连接）
+            try:
+                enable_cmd = f"adb -s {selected_device} shell svc wifi enable"
+                subprocess.run(
+                    enable_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    startupinfo=startupinfo
+                )
+            except Exception:
+                pass
+
+            # 按需求使用 wpa2
+            ssid_escaped = ssid.replace('"', '\\"')
+            pwd_escaped = (password or '').replace('"', '\\"')
+            cmd = f"adb -s {selected_device} shell cmd wifi connect-network \"{ssid_escaped}\" wpa2 \"{pwd_escaped}\""
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo
+            )
+            if result.returncode == 0 and ('Success' in (result.stdout or '') or not result.stderr):
+                QMessageBox.information(self, "成功", f"已连接到 WiFi：{ssid}")
+            else:
+                err = (result.stderr or result.stdout or '').strip()
+                QMessageBox.warning(self, "失败", f"连接 WiFi 失败：\n{err}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行失败：\n{str(e)}")
+
+    def load_wifi_configs(self):
+        """从INI文件加载 [WIFI] 配置，返回 {ssid: password}"""
+        ini_path = os.path.join(APP_CACHE_DIR, "bat_filepath.ini")
+        wifi_map = {}
+        try:
+            if os.path.exists(ini_path):
+                with open(ini_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                import re
+                pattern = r'\[WIFI\](.*?)(?=\[|$)'
+                match = re.search(pattern, content, re.DOTALL)
+                if match:
+                    wifi_content = match.group(1)
+                    for line in wifi_content.split('\n'):
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        if '=' in line:
+                            ssid, pwd = line.split('=', 1)
+                            ssid = ssid.strip()
+                            pwd = pwd.strip()
+                            if ssid:
+                                wifi_map[ssid] = pwd
+        except Exception as e:
+            print(f"加载WIFI配置时出错: {e}")
+        return wifi_map
+
     def create_install_apk_menu(self, install_apk_menu):
         """创建安装APK菜单"""
         install_apk_action = QAction('批量安装APK', self)
