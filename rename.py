@@ -222,7 +222,7 @@ class PowerRenameDialog(QWidget):
         apply_group = QGroupBox("应用于")
         apply_layout = QHBoxLayout()
         
-        self.include_files_checkbox = QCheckBox("包含文件")
+        self.include_files_checkbox = QCheckBox("包含文件+拓展名")
         self.include_files_checkbox.setChecked(True)  # 默认勾选
         self.include_files_checkbox.stateChanged.connect(self.update_preview)
         
@@ -386,13 +386,15 @@ class PowerRenameDialog(QWidget):
                 
                 # 根据"应用于"复选框确定处理范围
                 if self.include_files_checkbox.isChecked():
-                    # 处理文件名
+                    # 同时处理文件名与扩展名
                     name_part = os.path.splitext(original_name)[0]
                     ext_part = os.path.splitext(original_name)[1]
                     new_name_part = self.perform_replace_with_special_chars(
                         name_part, search_text, replace_text, folder_path, index
                     )
-                    new_name = new_name_part + ext_part
+                    # 扩展名允许参与查找/替换，但不参与特殊占位符（避免意外改变.及格式）
+                    new_ext_part = self.perform_replace(ext_part, search_text, replace_text)
+                    new_name = new_name_part + new_ext_part
                 else:
                     new_name = original_name
                 
