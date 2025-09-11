@@ -615,6 +615,112 @@ class LogVerboseMaskApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"执行拍照命令时出错: {str(e)}")
 
+
+    def reboot_device(self):
+        """重启设备"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        try:
+            command = f"adb -s {selected_device} shell reboot -p"
+
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            if result.returncode == 0:
+                # QMessageBox.information(self, "成功", "已发送拍照按键事件")
+                print(f"已发送关机按键事件: {command}")
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "未知错误"
+                QMessageBox.warning(self, "执行失败", f"发送关机事件失败: {error_msg}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行关机命令时出错: {str(e)}")
+            
+    def restart_device(self):
+        """重启设备"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        try:
+            command = f"adb -s {selected_device} shell reboot"
+
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            if result.returncode == 0:
+                # QMessageBox.information(self, "成功", "已发送拍照按键事件")
+                print(f"已发送重启按键事件: {command}")
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "未知错误"
+                QMessageBox.warning(self, "执行失败", f"发送重启事件失败: {error_msg}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行重启命令时出错: {str(e)}")
+
+    def lightscreen(self):
+        """亮屏"""
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        try:
+            command = f"adb -s {selected_device} shell input keyevent 26"
+
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            if result.returncode == 0:
+                # QMessageBox.information(self, "成功", "已发送拍照按键事件")
+                print(f"已发送亮屏按键事件: {command}")
+            else:
+                error_msg = result.stderr.strip() if result.stderr else "未知错误"
+                QMessageBox.warning(self, "执行失败", f"发送亮屏事件失败: {error_msg}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"执行亮屏命令时出错: {str(e)}")
+
     def create_menu_bar(self):
         """创建菜单栏"""
         menubar = self.menuBar()
@@ -763,6 +869,26 @@ class LogVerboseMaskApp(QMainWindow):
         screenshot_action.setToolTip('截图路径/sdcard/Pictures/Screenshots/')
         screenshot_action.triggered.connect(self.take_screenshot)
         quick_menu.addAction(screenshot_action)
+        
+        # 关机功能
+        reboot_action = QAction('关机', self)
+        reboot_action.setToolTip('关机')
+        reboot_action.triggered.connect(self.reboot_device)
+        quick_menu.addAction(reboot_action)
+
+        # 重启功能
+        restart_action = QAction('重启', self)
+        restart_action.setToolTip('重启')
+        restart_action.triggered.connect(self.restart_device)
+        quick_menu.addAction(restart_action)
+        
+        # 亮屏功能
+        lightscreen_action = QAction('亮屏', self)
+        lightscreen_action.setToolTip('亮屏')
+        lightscreen_action.triggered.connect(self.lightscreen)
+        quick_menu.addAction(lightscreen_action)
+        
+
 
     def initUI(self):
         self.setWindowTitle("Bat脚本管理器")

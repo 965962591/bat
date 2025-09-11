@@ -980,8 +980,7 @@ class FileOrganizer(QWidget):
         
         # 隐藏列标题
         self.right_tree.header().hide()
-        
-        # right_layout.addWidget(self.file_count_label)
+
         right_layout.addWidget(self.right_tree)
 
         # 右侧下方布局（已不再直接显示在右侧，而是移到状态栏）
@@ -996,15 +995,6 @@ class FileOrganizer(QWidget):
         self.line_edit.addItem("$yyyy$mm$dd_*")
         self.line_edit.addItem("$yyyy-$mm-$dd_#=1_*")
         self.line_edit.setFixedWidth(200)  # 设置宽度
-
-        # self.replace_line_edit = QComboBox(self)
-        # self.replace_line_edit.setEditable(True)  # 设置 QComboBox 为可编辑状态
-        # # 设置输入框提示文本
-        # self.replace_line_edit.lineEdit().setPlaceholderText("请输入替换内容")
-
-        # # 默认隐藏
-        # self.replace_line_edit.setVisible(False)
-        # self.replace_line_edit.setFixedWidth(self.replace_line_edit.width())  # 设置宽度
 
         # 开始按钮
         self.start_button = QPushButton("开始", self)
