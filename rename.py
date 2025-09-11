@@ -2,6 +2,7 @@ import sys
 import os
 import tempfile
 import re
+import datetime
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -913,16 +914,18 @@ class FileOrganizer(QWidget):
         self.line_edit.addItem("$p_*")
         self.line_edit.addItem("$$p_*")
         self.line_edit.addItem("#_*")
-        self.line_edit.setFixedWidth(self.line_edit.width())  # 设置宽度
+        self.line_edit.addItem("$yyyy$mm$dd_*")
+        self.line_edit.addItem("$yyyy-$mm-$dd_#=1_*")
+        self.line_edit.setFixedWidth(200)  # 设置宽度
 
-        self.replace_line_edit = QComboBox(self)
-        self.replace_line_edit.setEditable(True)  # 设置 QComboBox 为可编辑状态
-        # 设置输入框提示文本
-        self.replace_line_edit.lineEdit().setPlaceholderText("请输入替换内容")
+        # self.replace_line_edit = QComboBox(self)
+        # self.replace_line_edit.setEditable(True)  # 设置 QComboBox 为可编辑状态
+        # # 设置输入框提示文本
+        # self.replace_line_edit.lineEdit().setPlaceholderText("请输入替换内容")
 
-        # 默认隐藏
-        self.replace_line_edit.setVisible(False)
-        self.replace_line_edit.setFixedWidth(self.replace_line_edit.width())  # 设置宽度
+        # # 默认隐藏
+        # self.replace_line_edit.setVisible(False)
+        # self.replace_line_edit.setFixedWidth(self.replace_line_edit.width())  # 设置宽度
 
         # 开始按钮
         self.start_button = QPushButton("开始", self)
@@ -941,7 +944,7 @@ class FileOrganizer(QWidget):
 
         # 这些控件将被添加到状态栏右侧
         right_bottom_layout.addWidget(self.line_edit)
-        right_bottom_layout.addWidget(self.replace_line_edit)
+        # right_bottom_layout.addWidget(self.replace_line_edit)
         right_bottom_layout.addWidget(self.start_button)
         right_bottom_layout.addWidget(self.preview_button)
         right_bottom_layout.addWidget(self.power_rename_button)
@@ -1015,7 +1018,7 @@ class FileOrganizer(QWidget):
         self.status_bar.setFixedHeight(40)
         # 将控件作为永久部件添加（自动靠右对齐）
         self.status_bar.addPermanentWidget(self.line_edit)
-        self.status_bar.addPermanentWidget(self.replace_line_edit)
+        # self.status_bar.addPermanentWidget(self.replace_line_edit)
         self.status_bar.addPermanentWidget(self.start_button)
         self.status_bar.addPermanentWidget(self.preview_button)
         self.status_bar.addPermanentWidget(self.power_rename_button)
@@ -1178,14 +1181,6 @@ class FileOrganizer(QWidget):
             self.right_tree.setRootIndex(QModelIndex())
         # self.update_file_count()
 
-    # def update_file_count(self):
-    #     """统计右侧当前可见（未被过滤）的文件数量"""
-    #     file_count = 0
-    #     root_proxy_index = self.right_tree.rootIndex()
-    #     if root_proxy_index.isValid():
-    #         file_count = self.count_visible_files(root_proxy_index)
-    #     self.file_count_label.setText(f"文件总数: {file_count}")
-
     def count_visible_files(self, dir_proxy_index):
         """递归统计代理模型下可见文件数量（包含子目录）。"""
         count = 0
@@ -1257,9 +1252,9 @@ class FileOrganizer(QWidget):
     def rename_files(self):
         prefix = self.line_edit.currentText()
         replace_text = (
-            self.replace_line_edit.currentText()
-            # if self.replace_checkbox.isChecked()
-            # else None
+        #     self.replace_line_edit.currentText()
+        # #     # if self.replace_checkbox.isChecked()
+        # #     # else None
         )
         hash_count = prefix.count("#")
         try:
@@ -1323,11 +1318,41 @@ class FileOrganizer(QWidget):
         if not prefix:
             new_name = original_name
         else:
+            # 获取当前日期
+            now = datetime.datetime.now()
+            
+            # 处理日期格式命令
+            new_name = prefix.replace("$YYYY", str(now.year))  # 年，如 2025
+            new_name = new_name.replace("$MM", f"{now.month:02d}")  # 月，如 02
+            new_name = new_name.replace("$DD", f"{now.day:02d}")  # 日，如 02
+            new_name = new_name.replace("$yyyy", str(now.year))  # 年，如 2025
+            new_name = new_name.replace("$mm", f"{now.month:02d}")  # 月，如 02
+            new_name = new_name.replace("$dd", f"{now.day:02d}")  # 日，如 02
+            
+            # 处理 # 字符 - 数字序号（支持新的格式）
+            # 先处理带等号的格式，如 #=1, ##=1, ###=21
+            hash_equals_number_pattern = r'#+=(\d+)'
+            matches = re.finditer(hash_equals_number_pattern, new_name)
+            
+            # 从后往前替换，避免位置偏移问题
+            for match in reversed(list(matches)):
+                full_match = match.group()
+                start_number = int(match.group(1))
+                # 计算 # 的数量：总长度 - = 的长度 - 数字的长度
+                hash_count_equals = len(full_match) - 1 - len(match.group(1))
+                
+                # 计算实际数字：index + start_number
+                actual_number = index + start_number
+                number_format = f"{{:0{hash_count_equals}d}}"
+                formatted_number = number_format.format(actual_number)
+                
+                # 替换匹配的部分
+                new_name = new_name[:match.start()] + formatted_number + new_name[match.end():]
+            
+            # 处理纯 # 字符 - 数字序号（原有功能，不包含等号和数字的）
             if hash_count > 0:
                 number_format = f"{{:0{hash_count}d}}"
-                new_name = prefix.replace("#" * hash_count, number_format.format(index))
-            else:
-                new_name = prefix
+                new_name = new_name.replace("#" * hash_count, number_format.format(index))
 
             new_name = new_name.replace("$$p", f"{parent_folder_name}_{folder_name}")
             new_name = new_name.replace("$p", folder_name)
@@ -1380,9 +1405,9 @@ class FileOrganizer(QWidget):
         rename_data = []
         prefix = self.line_edit.currentText()
         replace_text = (
-            self.replace_line_edit.currentText()
-            # if self.replace_checkbox.isChecked()
-            # else None
+            # self.replace_line_edit.currentText()
+            # # if self.replace_checkbox.isChecked()
+            # # else None
         )
 
         hash_count = prefix.count("#")
@@ -1529,10 +1554,16 @@ class FileOrganizer(QWidget):
     def show_help(self):
         help_text = (
             "整体的使用方法类似于faststoneview\n"
-            "# 是数字\n"
+            "# 是数字序号（从0开始）\n"
+            "#=1 是数字序号（从1开始）\n"
+            "##=1 是两位数字序号（从01开始）\n"
+            "###=1 是三位数字序号（从001开始）\n"
             "* 表示保存原始文件名\n"
             "$p 表示文件夹名\n"
-            "$$p 表示两级文件夹名"
+            "$$p 表示两级文件夹名\n"
+            "$yyyy 或 $YYYY 表示当前年份（如2025）\n"
+            "$mm 或 $MM 表示当前月份（如02）\n"
+            "$dd 或 $DD 表示当前日期（如02）"
         )
         help_dialog = QDialog(self)
         help_dialog.setWindowTitle("帮助")
@@ -1549,13 +1580,6 @@ class FileOrganizer(QWidget):
         menu.addAction(open_folder_action)
         menu.exec_(self.left_tree.viewport().mapToGlobal(position))
 
-    # def open_context_menu_right(self, position):
-    #     menu = QMenu()
-    #     open_folder_action = QAction("在文件资源管理器中打开", self)
-    #     open_folder_action.triggered.connect(self.open_folder_in_explorer_right)
-    #     menu.addAction(open_folder_action)
-    #     menu.exec_(self.right_tree.viewport().mapToGlobal(position))
-
     def open_folder_in_explorer(self):
         selected_indexes = self.left_tree.selectedIndexes()
         if selected_indexes:
@@ -1566,17 +1590,6 @@ class FileOrganizer(QWidget):
             else:
                 # 如果不是文件夹，打开文件所在的文件夹
                 os.startfile(os.path.dirname(file_path))
-
-    # def open_folder_in_explorer_right(self):
-    #     selected_indexes = self.right_tree.selectedIndexes()
-    #     if selected_indexes:
-    #         index = selected_indexes[0]
-    #         file_path = self.right_model.filePath(index)
-    #         if os.path.isdir(file_path):
-    #             os.startfile(file_path)
-    #         else:
-    #             # 如果不是文件夹，打开文件所在的文件夹
-    #             os.startfile(os.path.dirname(file_path))
 
     def expand_to_path(self, folder_path):
         """自动展开文件树到指定路径"""
