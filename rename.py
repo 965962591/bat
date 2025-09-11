@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QStatusBar,
 )
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex, QAbstractNativeEventFilter
+from PyQt5.QtCore import QSettings, Qt, pyqtSignal, QDir, QModelIndex, QAbstractNativeEventFilter, QEvent, QTimer
 from PyQt5.QtGui import QKeySequence, QIcon, QFont
 from PyQt5.QtWidgets import QShortcut, QFileSystemModel
 from PyQt5.QtCore import QSortFilterProxyModel
@@ -929,6 +929,13 @@ class FileOrganizer(QWidget):
         self.left_tree.customContextMenuRequested.connect(self.open_context_menu)
         self.left_tree.setAlternatingRowColors(True)
         self.left_tree.setRootIsDecorated(True)
+
+        # 监听目录加载完成，确保可以在异步加载后滚动定位
+        try:
+            self._pending_scroll_path = None
+            self.left_model.directoryLoaded.connect(self._on_left_dir_loaded)
+        except Exception:
+            pass
         
         # 只显示名称列，隐藏其他列
         self.left_tree.hideColumn(1)  # 大小
@@ -957,6 +964,14 @@ class FileOrganizer(QWidget):
         self.right_proxy = ExcludeFilterProxyModel(self)
         self.right_proxy.setSourceModel(self.right_model)
         self.right_tree.setModel(self.right_proxy)
+        # 右侧支持拖放添加文件/文件夹
+        try:
+            self.right_tree.setAcceptDrops(True)
+            self.right_tree.viewport().setAcceptDrops(True)
+            self.right_tree.installEventFilter(self)
+            self.right_tree.viewport().installEventFilter(self)
+        except Exception:
+            pass
         # 用于显示空视图的临时目录
         self._empty_dir = None
         # 启动时设置为空目录，避免显示盘符
@@ -1106,6 +1121,99 @@ class FileOrganizer(QWidget):
         self.shortcut_esc.activated.connect(self.close)
 
         self.show()
+
+    def eventFilter(self, obj, event):
+        """拦截右侧视图的拖拽事件，支持拖入文件/文件夹。"""
+        try:
+            # 仅处理右侧树或其视口上的事件
+            if obj in (getattr(self, 'right_tree', None), getattr(self.right_tree, 'viewport', lambda: None)()):
+                if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+                    mime = getattr(event, 'mimeData', lambda: None)()
+                    if mime and mime.hasUrls():
+                        event.acceptProposedAction()
+                        return True
+                elif event.type() == QEvent.Drop:
+                    mime = getattr(event, 'mimeData', lambda: None)()
+                    if not mime or not mime.hasUrls():
+                        return True
+                    urls = mime.urls()
+                    paths = []
+                    for url in urls:
+                        try:
+                            if url.isLocalFile():
+                                p = url.toLocalFile()
+                                if p:
+                                    paths.append(p)
+                        except Exception:
+                            continue
+                    if paths:
+                        self._set_right_view_with_paths(paths)
+                    event.acceptProposedAction()
+                    return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def _set_right_view_with_paths(self, paths):
+        """将右侧视图设置为显示指定路径（支持文件/文件夹），并建立白名单。"""
+        if not paths:
+            return
+        # 归一化并区分文件与目录
+        files = []
+        dirs = []
+        for p in dict.fromkeys(paths):
+            try:
+                if os.path.isfile(p):
+                    files.append(p)
+                elif os.path.isdir(p):
+                    dirs.append(p)
+            except Exception:
+                continue
+
+        # 计算共同父目录
+        def common_parent(dir_list):
+            parts = [os.path.abspath(d).split(os.sep) for d in dir_list if os.path.isdir(d)]
+            if not parts:
+                return None
+            min_len = min(len(x) for x in parts)
+            prefix = []
+            for i in range(min_len):
+                token = parts[0][i]
+                if all(x[i] == token for x in parts):
+                    prefix.append(token)
+                else:
+                    break
+            return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
+
+        target_dir = None
+        candidate_dirs = list(dirs)
+        # 若包含文件，以其父目录参与共同父目录计算
+        for f in files:
+            candidate_dirs.append(os.path.dirname(f))
+        if candidate_dirs:
+            target_dir = common_parent(candidate_dirs) or (candidate_dirs[0] if candidate_dirs else None)
+
+        # 重置右侧过滤状态
+        self._right_excluded_paths = []
+        self.right_proxy.clear_excluded()
+        self.right_proxy.set_hide_all(False)
+
+        # 设置白名单：优先文件，否则目录
+        if files:
+            self.right_proxy.set_included(set(files))
+        elif dirs:
+            self.right_proxy.set_included(set(dirs))
+        else:
+            self.right_proxy.clear_included()
+
+        # 设置右侧根目录
+        try:
+            if target_dir and os.path.isdir(target_dir):
+                root_source_index = self.right_model.index(target_dir)
+                self.right_tree.setRootIndex(self.right_proxy.mapFromSource(root_source_index))
+                self._empty_dir = None
+        except Exception:
+            pass
 
     def format_file_size(self, size_bytes):
         """格式化文件大小"""
@@ -1677,12 +1785,60 @@ class FileOrganizer(QWidget):
             if parent_index.isValid():
                 self.left_tree.expand(parent_index)
             current_path = os.path.dirname(current_path)
-            
-        # 滚动到目标路径
-        self.left_tree.scrollTo(path_index, QTreeView.PositionAtCenter)
-        # 选中目标路径
-        self.left_tree.setCurrentIndex(path_index)
 
+        # 记录待滚动路径，并在加载完成后滚动
+        try:
+            self._request_scroll_to_path(folder_path)
+        except Exception:
+            pass
+
+        # 立即尝试一次，再用定时器兜底
+        try:
+            self._try_scroll_to(folder_path)
+            QTimer.singleShot(60, lambda: self._try_scroll_to(folder_path))
+            QTimer.singleShot(200, lambda: self._try_scroll_to(folder_path))
+        except Exception:
+            pass
+
+    def _request_scroll_to_path(self, folder_path):
+        """注册一个待滚动路径，等待目录加载完成后执行滚动。"""
+        try:
+            self._pending_scroll_path = os.path.normcase(os.path.normpath(folder_path))
+        except Exception:
+            self._pending_scroll_path = folder_path
+
+    def _on_left_dir_loaded(self, loaded_path):
+        """当 QFileSystemModel 异步加载目录后回调，执行滚动到目标路径。"""
+        try:
+            if not self._pending_scroll_path:
+                return
+            try:
+                loaded_norm = os.path.normcase(os.path.normpath(loaded_path))
+            except Exception:
+                loaded_norm = loaded_path
+            if self._pending_scroll_path == loaded_norm:
+                # 目标目录加载完成，执行滚动
+                self._try_scroll_to(self._pending_scroll_path)
+                # 清除待滚动
+                self._pending_scroll_path = None
+        except Exception:
+            pass
+
+    def _try_scroll_to(self, path):
+        """尝试滚动并选中路径，前提是索引有效。"""
+        try:
+            idx = self.left_model.index(path)
+            if not idx.isValid():
+                return
+            # 确保已展开到该节点
+            self.left_tree.expand(idx)
+            # 滚动并选中
+            self.left_tree.scrollTo(idx, QTreeView.PositionAtCenter)
+            self.left_tree.setCurrentIndex(idx)
+        except Exception:
+            pass
+
+        
     def set_folder_path(self, folder_path):
         """设置文件夹路径到文件模型"""
         if os.path.isdir(folder_path):
@@ -1690,7 +1846,6 @@ class FileOrganizer(QWidget):
             # 自动展开到指定路径
             self.expand_to_path(folder_path)
             # 不自动更新右侧，由“增加/增加全部”按钮控制
-            
             # 计算指定文件夹内的文件夹数量
             folder_count = 0
             try:
@@ -1700,11 +1855,73 @@ class FileOrganizer(QWidget):
                         folder_count += 1
             except PermissionError:
                 folder_count = "无权限访问"
-            
-            # 显示当前选中文件夹的信息
-            # folder_name = os.path.basename(folder_path) or folder_path
-            # self.folder_count_label.setText(f"当前文件夹: {folder_name} (子文件夹: {folder_count})")
-            # self.update_file_count()
+
+
+    def set_folder_list(self, file_list):
+        """设置文件/文件夹列表：左侧定位，右侧打开（兼容入口）。"""
+        try:
+            self.set_paths(file_list)
+        except Exception as e:
+            print(f"set_folder_list 调用失败: {e}")
+
+    def set_paths(self, paths):
+        """接收文件/文件夹路径列表：
+        - 左侧：定位并展开到共同父目录；
+        - 右侧：以这些路径为白名单并设置根目录，直接进行重命名。
+        """
+        if not paths:
+            return
+        # 归一化并区分文件/目录
+        unique_paths = list(dict.fromkeys(paths))
+        files = []
+        dirs = []
+        for p in unique_paths:
+            try:
+                if os.path.isfile(p):
+                    files.append(p)
+                elif os.path.isdir(p):
+                    dirs.append(p)
+            except Exception:
+                continue
+
+        # 计算共同父目录
+        def common_parent(dir_list):
+            parts = [os.path.abspath(d).split(os.sep) for d in dir_list if os.path.isdir(d)]
+            if not parts:
+                return None
+            min_len = min(len(x) for x in parts)
+            prefix = []
+            for i in range(min_len):
+                token = parts[0][i]
+                if all(x[i] == token for x in parts):
+                    prefix.append(token)
+                else:
+                    break
+            return os.sep.join(prefix) if prefix else os.path.dirname(os.path.abspath(dir_list[0]))
+
+        candidate_dirs = list(dirs)
+        for f in files:
+            candidate_dirs.append(os.path.dirname(f))
+        target_dir = None
+        if candidate_dirs:
+            target_dir = common_parent(candidate_dirs) or (candidate_dirs[0] if candidate_dirs else None)
+
+        # 左侧：定位并展开
+        try:
+            if target_dir and os.path.isdir(target_dir):
+                self.expand_to_path(target_dir)
+                # 选中共同父目录，便于用户感知当前位置
+                idx = self.left_model.index(target_dir)
+                if idx.isValid():
+                    self.left_tree.setCurrentIndex(idx)
+        except Exception:
+            pass
+
+        # 右侧：打开并建立白名单
+        try:
+            self._set_right_view_with_paths(unique_paths)
+        except Exception as e:
+            print(f"设置右侧视图失败: {e}")
 
     def on_left_tree_selection_changed(self, selected, deselected):
         """处理左侧文件树选择变化"""
