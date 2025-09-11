@@ -1335,7 +1335,8 @@ class FileOrganizer(QWidget):
                     continue
 
             # 计算传入的文件总数量（用于判断是否自动展开）
-            total_input_files = len(files)
+            # 如果拖入的是文件，使用文件数量；如果拖入的是文件夹，使用None来触发文件夹内统计
+            total_input_files = len(files) if files else None
             
             # 计算共同父目录
             def common_parent(dir_list):
@@ -1406,8 +1407,13 @@ class FileOrganizer(QWidget):
         except Exception as e:
             print(f"安全展开路径失败: {e}")
     
-    def _safe_auto_expand_small_folders(self, target_dir, input_file_count=0):
-        """安全地自动展开小文件夹"""
+    def _safe_auto_expand_small_folders(self, target_dir, input_file_count=None):
+        """安全地自动展开小文件夹
+        
+        Args:
+            target_dir: 目标目录
+            input_file_count: 传入的文件数量，如果为None则统计文件夹内的总文件数量
+        """
         try:
             if not target_dir or not Path(target_dir).is_dir():
                 return
@@ -1426,18 +1432,32 @@ class FileOrganizer(QWidget):
         except Exception as e:
             print(f"安全自动展开失败: {e}")
 
-    def _auto_expand_small_folders(self, parent_index, input_file_count=0):
-        """基于传入的文件数量判断是否自动展开文件夹"""
+    def _auto_expand_small_folders(self, parent_index, input_file_count=None):
+        """判断是否自动展开文件夹
+        
+        Args:
+            parent_index: 父级索引
+            input_file_count: 传入的文件数量，如果为None则统计文件夹内的总文件数量
+        """
         try:
             if not parent_index.isValid():
                 return
                 
-            # 基于传入的文件数量判断是否展开
-            if input_file_count < 30:
-                print(f"传入文件数量为 {input_file_count}，少于30个，自动展开文件夹")
-                self._expand_folders_recursive(parent_index, max_depth=3)  # 限制递归深度为3层
+            if input_file_count is not None:
+                # 情况1：通过set_path函数传入文件，基于传入的文件数量判断
+                if input_file_count < 30:
+                    print(f"传入文件数量为 {input_file_count}，少于30个，自动展开文件夹")
+                    self._expand_folders_recursive(parent_index, max_depth=3)
+                else:
+                    print(f"传入文件数量为 {input_file_count}，超过30个，不自动展开")
             else:
-                print(f"传入文件数量为 {input_file_count}，超过30个，不自动展开")
+                # 情况2：拖入文件夹，统计文件夹内的总文件数量
+                total_file_count = self._count_total_files_in_tree(parent_index)
+                if total_file_count < 30:
+                    print(f"文件夹内总文件数量为 {total_file_count}，少于30个，自动展开文件夹")
+                    self._expand_folders_recursive(parent_index, max_depth=3)
+                else:
+                    print(f"文件夹内总文件数量为 {total_file_count}，超过30个，不自动展开")
             
         except Exception as e:
             print(f"自动展开文件夹失败: {e}")
@@ -1538,6 +1558,49 @@ class FileOrganizer(QWidget):
             return 0
         except Exception as e:
             print(f"统计文件数量失败 {folder_path}: {e}")
+            return 0
+    
+    def _count_total_files_in_tree(self, parent_index):
+        """递归统计树形结构中所有文件夹的总文件数量（用于拖入文件夹时的判断）"""
+        total_count = 0
+        try:
+            if not parent_index.isValid():
+                return 0
+                
+            # 统计当前层级的所有文件夹
+            row_count = self.right_proxy.rowCount(parent_index)
+            for row in range(row_count):
+                try:
+                    child_index = self.right_proxy.index(row, 0, parent_index)
+                    if not child_index.isValid():
+                        continue
+                        
+                    source_index = self.right_proxy.mapToSource(child_index)
+                    if not source_index.isValid():
+                        continue
+                        
+                    if self.right_model.isDir(source_index):
+                        # 这是一个文件夹，统计其中的文件数量
+                        folder_path = self.right_model.filePath(source_index)
+                        if folder_path and Path(folder_path).is_dir():
+                            folder_file_count = self._count_files_in_folder(folder_path)
+                            total_count += folder_file_count
+                            
+                            # 递归统计子文件夹
+                            sub_count = self._count_total_files_in_tree(child_index)
+                            total_count += sub_count
+                    else:
+                        # 这是一个文件，计入总数
+                        total_count += 1
+                        
+                except Exception as e:
+                    print(f"统计单个项目时出错: {e}")
+                    continue
+                    
+            return total_count
+            
+        except Exception as e:
+            print(f"统计总文件数量失败: {e}")
             return 0
     
 
