@@ -756,10 +756,12 @@ class LogVerboseMaskApp(QMainWindow):
 
         #安装APK菜单
         install_apk_menu = menubar.addMenu('安装APK')
+        install_apk_menu.setToolTip('选择文件夹，批量安装文件夹内apk文件')
         self.create_install_apk_menu(install_apk_menu)
 
         #连接wifi
         connect_wifi_menu = menubar.addMenu('连接WiFi')
+        connect_wifi_menu.setToolTip('选择WiFi，连接指定WiFi,请在配置文件中提前配置WiFi信息')
         self.create_connect_wifi_menu(connect_wifi_menu)
 
     def create_connect_wifi_menu(self, connect_wifi_menu):
