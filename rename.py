@@ -108,6 +108,10 @@ class PowerRenameDialog(QWidget):
         icon_path = os.path.join(os.path.dirname(__file__), "icon", "rename.ico")
         self.setWindowIcon(QIcon(icon_path))
         
+        # 添加ESC键关闭快捷键
+        self.shortcut_esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self.shortcut_esc.activated.connect(self.close)
+        
         # 主布局
         main_layout = QVBoxLayout()
         
@@ -990,6 +994,11 @@ class PowerRenameDialog(QWidget):
         self.file_list = new_file_list
         print(f"重命名后刷新文件列表: {len(self.file_list)} 个文件")
         
+    # def closeEvent(self, event):
+    #     """窗口关闭事件"""
+    #     self.window_closed.emit()
+    #     super().closeEvent(event)
+        
 
 
 class PreviewDialog(QDialog):
@@ -1415,19 +1424,25 @@ class FileOrganizer(QWidget):
             print(f"安全自动展开失败: {e}")
 
     def _auto_expand_small_folders(self, parent_index):
-        """自动展开文件数量少于50的文件夹"""
+        """自动展开文件数量少于30的文件夹（基于所有文件夹的总文件数量）"""
         try:
             if not parent_index.isValid():
                 return
                 
-            # 递归检查并展开小文件夹
-            self._expand_folders_recursive(parent_index, max_depth=3)  # 限制递归深度为3层
+            # 先统计所有文件夹的总文件数量
+            total_file_count = self._count_total_files_in_tree(parent_index)
+            
+            # 如果总文件数量少于30，则展开所有文件夹
+            if total_file_count < 30:
+                self._expand_folders_recursive(parent_index, max_depth=3)  # 限制递归深度为3层
+            else:
+                print(f"总文件数量为 {total_file_count}，超过30个，不自动展开")
             
         except Exception as e:
             print(f"自动展开文件夹失败: {e}")
     
     def _expand_folders_recursive(self, parent_index, current_depth=0, max_depth=3):
-        """递归展开小文件夹"""
+        """递归展开所有文件夹（当总文件数量少于30时）"""
         try:
             if current_depth >= max_depth:
                 return
@@ -1453,24 +1468,17 @@ class FileOrganizer(QWidget):
                     if not source_index.isValid() or not self.right_model.isDir(source_index):
                         continue
                         
-                    # 获取文件夹路径并统计文件数量
+                    # 获取文件夹路径
                     folder_path = self.right_model.filePath(source_index)
                     if not folder_path or not Path(folder_path).is_dir():
                         continue
                         
-                    # 统计文件夹中的文件数量（不包括子文件夹）
-                    file_count = self._count_files_in_folder(folder_path)
+                    # 展开所有文件夹（因为总文件数量已经少于30）
+                    self.right_tree.expand(child_index)
+                    print(f"自动展开文件夹: {Path(folder_path).name}")
                     
-                    if file_count > 0 and file_count < 30:
-                        # 立即展开这个文件夹
-                        self.right_tree.expand(child_index)
-                        print(f"自动展开文件夹: {Path(folder_path).name} (包含 {file_count} 个文件)")
-                        
-                        # 记录需要递归处理的文件夹路径
-                        folders_to_process.append((folder_path, current_depth + 1))
-                        
-                    elif file_count >= 30:
-                        print(f"跳过展开大文件夹: {Path(folder_path).name} (包含 {file_count} 个文件)")
+                    # 记录需要递归处理的文件夹路径
+                    folders_to_process.append((folder_path, current_depth + 1))
                         
                 except Exception as e:
                     print(f"处理单个文件夹时出错: {e}")
@@ -1521,9 +1529,6 @@ class FileOrganizer(QWidget):
             for item in folder.iterdir():
                 if item.is_file():
                     file_count += 1
-                    # 如果文件数量已经超过50，提前返回
-                    if file_count >= 30:
-                        break
                         
             return file_count
             
@@ -1532,6 +1537,49 @@ class FileOrganizer(QWidget):
             return 0
         except Exception as e:
             print(f"统计文件数量失败 {folder_path}: {e}")
+            return 0
+    
+    def _count_total_files_in_tree(self, parent_index):
+        """递归统计树形结构中所有文件夹的总文件数量"""
+        total_count = 0
+        try:
+            if not parent_index.isValid():
+                return 0
+                
+            # 统计当前层级的所有文件夹
+            row_count = self.right_proxy.rowCount(parent_index)
+            for row in range(row_count):
+                try:
+                    child_index = self.right_proxy.index(row, 0, parent_index)
+                    if not child_index.isValid():
+                        continue
+                        
+                    source_index = self.right_proxy.mapToSource(child_index)
+                    if not source_index.isValid():
+                        continue
+                        
+                    if self.right_model.isDir(source_index):
+                        # 这是一个文件夹，统计其中的文件数量
+                        folder_path = self.right_model.filePath(source_index)
+                        if folder_path and Path(folder_path).is_dir():
+                            folder_file_count = self._count_files_in_folder(folder_path)
+                            total_count += folder_file_count
+                            
+                            # 递归统计子文件夹
+                            sub_count = self._count_total_files_in_tree(child_index)
+                            total_count += sub_count
+                    else:
+                        # 这是一个文件，计入总数
+                        total_count += 1
+                        
+                except Exception as e:
+                    print(f"统计单个项目时出错: {e}")
+                    continue
+                    
+            return total_count
+            
+        except Exception as e:
+            print(f"统计总文件数量失败: {e}")
             return 0
 
     def format_file_size(self, size_bytes):
