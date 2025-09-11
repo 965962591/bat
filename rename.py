@@ -1251,6 +1251,10 @@ class FileOrganizer(QWidget):
         # 添加ESC键退出快捷键
         self.shortcut_esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
         self.shortcut_esc.activated.connect(self.close)
+        
+        # 添加Ctrl+D快捷键用于清空右侧视图
+        self.shortcut_remove_all = QShortcut(QKeySequence("Ctrl+D"), self)
+        self.shortcut_remove_all.activated.connect(self.remove_all_from_right)
 
         self.show()
 
@@ -1445,7 +1449,8 @@ class FileOrganizer(QWidget):
         # self.update_file_count()
 
     def remove_all_from_right(self):
-        # 清空右侧视图（重置过滤并置空根索引）
+        """清空右侧视图（重置过滤并置空根索引）"""
+        # 清空右侧视图
         self._right_excluded_paths = []
         if hasattr(self, 'right_proxy'):
             self.right_proxy.clear_excluded()
@@ -1461,7 +1466,10 @@ class FileOrganizer(QWidget):
         except Exception:
             # 兜底：设置无效索引
             self.right_tree.setRootIndex(QModelIndex())
-        # self.update_file_count()
+        
+        # 在状态栏显示操作反馈
+        if hasattr(self, 'status_bar'):
+            self.status_bar.showMessage("已清空右侧视图 (Ctrl+D)", 2000)
 
     def count_visible_files(self, dir_proxy_index):
         """递归统计代理模型下可见文件数量（包含子目录）。"""
@@ -2037,7 +2045,6 @@ class FileOrganizer(QWidget):
             folder_count = sum(1 for item in folder_path_obj.iterdir() if item.is_dir())
         except PermissionError:
             folder_count = "无权限访问"
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
