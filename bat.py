@@ -3871,6 +3871,27 @@ class DownloadThread(QThread):
                 # 设置当前任务进度为100%（因为没有文件需要下载）
                 self.task_progress_updated.emit(device, folder_name, 100)
                 return True
+
+            # 额外原生校验：若目录仅包含空子文件夹（无任何非空文件），也直接视为完成
+            try:
+                quick_check_cmd = f'adb -s {device} shell find {source_path} -type f -size +0c -print -quit'
+                quick_check = subprocess.run(
+                    quick_check_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
+                if quick_check.returncode == 0 and not (quick_check.stdout or '').strip():
+                    # 未发现任何非空文件，视为仅含空（子）目录
+                    self.progress_updated.emit(f"源路径 {source_path} 仅包含空文件夹，下载已完成")
+                    self.task_progress_updated.emit(device, folder_name, 100)
+                    return True
+            except Exception:
+                # 静默失败，不影响后续流程
+                pass
             
             self.progress_updated.emit(f"开始下载 {remote_file_count} 个文件...")
             print(f"[调试] 远程路径 {source_path} 中有 {remote_file_count} 个文件")
@@ -4165,6 +4186,25 @@ class DownloadThread(QThread):
                     except ValueError:
                         return 0
                 else:
+                    # 兜底：使用原生 ls -lR 输出判断是否存在常规文件（行首为'-'）
+                    try:
+                        ls_cmd = f'adb -s {device} shell ls -lR {source_path}'
+                        ls_res = subprocess.run(
+                            ls_cmd,
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            encoding='utf-8',
+                            startupinfo=startupinfo,
+                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                        )
+                        if ls_res.returncode == 0:
+                            for _line in (ls_res.stdout or '').splitlines():
+                                if _line.startswith('-'):
+                                    return 1
+                            return 0
+                    except Exception:
+                        pass
                     return 0
                 
         except Exception:
