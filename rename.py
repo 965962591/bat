@@ -9,7 +9,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-
+from qt_material import apply_stylesheet
 
 
 class ExcludeFilterProxyModel(QSortFilterProxyModel):
@@ -2327,5 +2327,6 @@ class FileOrganizer(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    apply_stylesheet(app, theme="light_blue.xml", extra={"font_size": 16})
     ex = FileOrganizer()
     sys.exit(app.exec_())
