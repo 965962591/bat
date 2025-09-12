@@ -1174,11 +1174,13 @@ class LogVerboseMaskApp(QMainWindow):
         self.capture_start_btn.setToolTip("按数量与间隔进行批量拍摄")
         self.capture_pause_btn = QPushButton("暂停/继续")
         self.capture_pause_btn.setEnabled(False)
-
+        #保存
+        save_image_button = QPushButton("保存")
+        save_image_button.setToolTip("保存指定数量图片到本地")
         # 连接按钮信号
         self.capture_start_btn.clicked.connect(self.start_batch_capture)
         self.capture_pause_btn.clicked.connect(self.toggle_capture_pause)
-        
+        save_image_button.clicked.connect(self.save_image_to_local)
         device_layout.addWidget(device_label)
         device_layout.addWidget(self.device_combo)
         device_layout.addWidget(refresh_button)
@@ -1190,6 +1192,7 @@ class LogVerboseMaskApp(QMainWindow):
         device_layout.addWidget(self.capture_interval_spin)
         device_layout.addWidget(self.capture_start_btn)
         device_layout.addWidget(self.capture_pause_btn)
+        device_layout.addWidget(save_image_button)
         device_layout.addStretch()  # 添加弹性空间
         
         main_layout.addLayout(device_layout)
@@ -1462,6 +1465,211 @@ class LogVerboseMaskApp(QMainWindow):
         else:
             self.capture_pause_event.set()
 
+    def save_image_to_local(self):
+        """
+        保存图片到本地
+        1、获取到拍摄的张数
+        2、从/sdcard/scim/camera/ 中下载最新的图片（只下载拍摄的张数的图）
+        3、保存到本地，本地路径是~/Pictures/年_月_日_时_分_秒/  如果~/Pictures/ 不存在，则创建
+        
+        """
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+        
+        try:
+            # 获取拍摄的张数
+            shot_count = self.capture_count_spin.value()
+            if shot_count <= 0:
+                QMessageBox.warning(self, "参数错误", "拍摄张数必须大于0！")
+                return
+                
+            # 创建本地保存路径
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+            pictures_dir = os.path.expanduser("~/Pictures")
+            save_dir = os.path.join(pictures_dir, timestamp)
+            
+            # 确保目录存在
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # 获取远程文件列表
+            remote_dir = "/sdcard/scim/camera/"
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+            
+            # 检查远程目录是否存在
+            check_cmd = f"adb -s {selected_device} shell ls -la {remote_dir}"
+            result = subprocess.run(
+                check_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='gbk' if sys.platform == "win32" else 'utf-8',  # Windows使用GBK编码
+                errors='replace',  # 处理编码错误
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            
+            if "No such file or directory" in result.stderr or result.returncode != 0:
+                # 尝试其他可能的相机目录
+                alternative_dirs = ["/sdcard/DCIM/Camera/"]
+                found_dir = False
+                
+                for alt_dir in alternative_dirs:
+                    check_cmd = f"adb -s {selected_device} shell ls -la {alt_dir}"
+                    result = subprocess.run(
+                        check_cmd,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding='gbk' if sys.platform == "win32" else 'utf-8',  # Windows使用GBK编码
+                        errors='replace',  # 处理编码错误
+                        startupinfo=startupinfo,
+                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                    )
+                    
+                    if result.returncode == 0 and "No such file or directory" not in result.stderr:
+                        remote_dir = alt_dir
+                        found_dir = True
+                        break
+                
+                if not found_dir:
+                    # 如果找不到预设目录，尝试创建一个目录
+                    try:
+                        fallback_dir = "/sdcard/DCIM/Camera/"
+                        mkdir_cmd = f"adb -s {selected_device} shell mkdir -p {fallback_dir}"
+                        subprocess.run(
+                            mkdir_cmd,
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            encoding='gbk' if sys.platform == "win32" else 'utf-8',
+                            errors='replace',
+                            startupinfo=startupinfo,
+                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                        )
+                        remote_dir = fallback_dir
+                        print(f"创建并使用备用目录: {fallback_dir}")
+                    except Exception as e:
+                        print(f"创建备用目录失败: {e}")
+                        QMessageBox.warning(self, "路径错误", "无法找到设备上的相机图片目录！")
+                        return
+            
+            # 列出远程文件，不使用grep命令
+            list_cmd = f"adb -s {selected_device} shell ls -la {remote_dir}"
+            result = subprocess.run(
+                list_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='gbk' if sys.platform == "win32" else 'utf-8',  # Windows使用GBK编码
+                errors='replace',  # 处理编码错误
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            
+            if result.returncode != 0:
+                QMessageBox.warning(self, "命令执行失败", f"获取图片列表失败：{result.stderr}")
+                return
+            
+            # 解析文件列表，获取最新的N张图片
+            files = []
+            for line in result.stdout.splitlines():
+                try:
+                    # 跳过目录项和非文件行
+                    if "d" in line[:10] or line.startswith("total ") or not line.strip():
+                        continue
+                        
+                    parts = line.split()
+                    if len(parts) >= 7:  # 至少需要7个部分（权限、链接数、用户、组、大小、日期、文件名）
+                        # 获取文件名（可能在最后一个位置或之后的位置）
+                        filename = parts[-1]
+                        
+                        # 检查是否是图片文件
+                        if filename and (filename.lower().endswith('.jpg') or 
+                                         filename.lower().endswith('.jpeg') or 
+                                         filename.lower().endswith('.png')):
+                            print(f"找到图片: {filename}")
+                            files.append(filename)
+                except Exception as e:
+                    print(f"解析文件行出错: {line} - {e}")
+                    continue
+                    
+            # 按文件名排序（通常包含时间戳）
+            files.sort()
+            
+            # 取最新的shot_count张图片（文件列表已按时间排序，最新的在最后）
+            files = files[-shot_count:] if len(files) >= shot_count else files
+            
+            if not files:
+                QMessageBox.warning(self, "未找到图片", "设备上未找到任何图片文件！")
+                return
+            
+            # 创建进度对话框
+            from PyQt5.QtWidgets import QProgressDialog
+            progress = QProgressDialog("正在下载图片...", "取消", 0, len(files), self)
+            progress.setWindowTitle("保存图片")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.show()
+            
+            # 下载文件
+            success_count = 0
+            for i, filename in enumerate(files):
+                if progress.wasCanceled():
+                    break
+                    
+                progress.setValue(i)
+                progress.setLabelText(f"正在下载 {i+1}/{len(files)}: {filename}")
+                
+                remote_path = f"{remote_dir}{filename}"
+                local_path = os.path.join(save_dir, filename)
+                
+                pull_cmd = f"adb -s {selected_device} pull \"{remote_path}\" \"{local_path}\""
+                result = subprocess.run(
+                    pull_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    encoding='gbk' if sys.platform == "win32" else 'utf-8',  # Windows使用GBK编码
+                    errors='replace',  # 处理编码错误
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+                )
+                
+                if result.returncode == 0:
+                    success_count += 1
+                else:
+                    print(f"下载失败: {filename} - {result.stderr}")
+            
+            progress.setValue(len(files))
+            
+            # 显示结果
+            if success_count > 0:
+                QMessageBox.information(self, "下载完成", 
+                                     f"成功下载 {success_count}/{len(files)} 张图片到:\n{save_dir}")
+                
+                # 尝试打开保存目录
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(save_dir)
+                    elif sys.platform == "darwin":  # macOS
+                        subprocess.run(["open", save_dir])
+                    else:  # Linux
+                        subprocess.run(["xdg-open", save_dir])
+                except Exception as e:
+                    print(f"打开目录失败: {e}")
+            else:
+                QMessageBox.warning(self, "下载失败", "未能成功下载任何图片！")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存图片时出错: {str(e)}")
+        
     def update_script_mask(self):
         """更新高通脚本复选框"""
         self.mask_value = 0x00000000
