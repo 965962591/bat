@@ -3867,7 +3867,7 @@ class DownloadThread(QThread):
             # 首先获取源文件夹中的文件数量，用于计算进度
             remote_file_count = self.get_file_count(device, source_path)
             if remote_file_count == 0:
-                self.progress_updated.emit(f"警告: 源路径 {source_path} 中没有文件")
+                self.progress_updated.emit(f"源路径 {source_path} 中没有文件，下载已完成")
                 # 设置当前任务进度为100%（因为没有文件需要下载）
                 self.task_progress_updated.emit(device, folder_name, 100)
                 return True
@@ -3932,12 +3932,12 @@ class DownloadThread(QThread):
                             else:
                                 print(f"[调试] 定时器进度无变化: 本地 {local_file_count}/{remote_file_count} 文件 ({progress}%)")
                         else:
-                            # 如果远程文件数为0，显示0%进度
-                            if last_progress != 0:
-                                self.task_progress_updated.emit(device, folder_name, 0)
-                                last_progress = 0
-                                self.progress_updated.emit("下载进度: 0/0 文件 (0%)")
-                                print(f"[调试] 定时器: 远程文件数为0，设置进度为0%")
+                            # 如果远程文件数为0，显示100%进度（因为没有文件需要下载就意味着已完成）
+                            if last_progress != 100:
+                                self.task_progress_updated.emit(device, folder_name, 100)
+                                last_progress = 100
+                                self.progress_updated.emit("下载进度: 0/0 文件 (100%)")
+                                print(f"[调试] 定时器: 远程文件数为0，设置进度为100%")
                     except Exception as e:
                         print(f"[调试] 定时器检查文件数量时出错: {e}")
                     
@@ -3950,14 +3950,19 @@ class DownloadThread(QThread):
                     final_local_count = self.get_local_file_count(local_download_path)
                     print(f"[调试] 最终本地文件数量: {final_local_count}")
                     
+                    # 如果远程文件数为0，则直接显示100%完成
+                    if remote_file_count == 0:
+                        self.task_progress_updated.emit(device, folder_name, 100)
+                        self.progress_updated.emit(f"下载完成: 源文件夹中没有文件 (100%)")
+                        print(f"[调试] 定时器: 源文件夹中没有文件，显示100%进度")
                     # 如果文件数量达到或接近目标，显示100%
-                    if remote_file_count > 0 and final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
+                    elif remote_file_count > 0 and final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
                         self.task_progress_updated.emit(device, folder_name, 100)
                         self.progress_updated.emit(f"下载完成: {final_local_count}/{remote_file_count} 文件 (100%)")
                         print(f"[调试] 定时器: 下载完成，显示100%进度")
                     else:
                         # 否则显示实际进度
-                        final_progress = min(99, int((final_local_count / remote_file_count) * 100))
+                        final_progress = min(99, int((final_local_count / remote_file_count) * 100)) if remote_file_count > 0 else 100
                         self.task_progress_updated.emit(device, folder_name, final_progress)
                         self.progress_updated.emit(f"下载进度: {final_local_count}/{remote_file_count} 文件 ({final_progress}%)")
                         print(f"[调试] 定时器: 最终进度 {final_progress}%")
@@ -4082,8 +4087,13 @@ class DownloadThread(QThread):
             print(f"[调试] 主线程最终检查，本地文件数量: {final_local_count}")
             
             if return_code == 0:
+                # 如果远程文件数为0，则直接返回成功
+                if remote_file_count == 0:
+                    self.task_progress_updated.emit(device, folder_name, 100)
+                    self.progress_updated.emit(f"✓ 下载完成，源文件夹中没有文件")
+                    return True
                 # 检查是否真的有文件被下载
-                if final_local_count > 0:
+                elif final_local_count > 0:
                     # 只有在定时器没有设置100%的情况下才设置
                     if final_local_count >= remote_file_count * 0.95:  # 95%以上认为完成
                         self.task_progress_updated.emit(device, folder_name, 100)
