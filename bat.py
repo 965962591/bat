@@ -33,13 +33,12 @@ import threading
 from PyQt5.QtCore import QMetaObject, Qt, pyqtSlot, Q_ARG, QTimer, pyqtSignal, QThread
 import json
 import os
-import wmi
-import pythoncom
 import configparser
 from datetime import datetime
+# 延迟导入重量级模块
 
 from qt_material import apply_stylesheet
-from rename import FileOrganizer
+
 # 全局变量定义缓存目录
 APP_CACHE_DIR = os.path.join(os.path.dirname(__file__), "app_cache")
 
@@ -57,58 +56,73 @@ class USBDeviceMonitor:
             self.on_device_changed()
 
     def start_monitoring(self):
-        pythoncom.CoInitialize()
         try:
-            c = wmi.WMI(moniker="root/cimv2")
-            arr_filter = c.Win32_PnPEntity.watch_for(
-                notification_type="creation",
-                delay_secs=1
-            )
-            rem_filter = c.Win32_PnPEntity.watch_for(
-                notification_type="deletion",
-                delay_secs=1
-            )
+            import wmi
+            import pythoncom
+            
+            pythoncom.CoInitialize()
+            try:
+                c = wmi.WMI(moniker="root/cimv2")
+                arr_filter = c.Win32_PnPEntity.watch_for(
+                    notification_type="creation",
+                    delay_secs=1
+                )
+                rem_filter = c.Win32_PnPEntity.watch_for(
+                    notification_type="deletion",
+                    delay_secs=1
+                )
 
-            self.thread_running = True
-            # print("[监控系统] USB设备监控服务启动")
-            while self.thread_running:
-                try:
-                    new_device = arr_filter(0.5)
-                    # print(f"[监控系统] 检测到新设备: {new_device.Description}")
-                    self.device_changed_callback()
-                except wmi.x_wmi_timed_out:
-                    pass
+                self.thread_running = True
+                # print("[监控系统] USB设备监控服务启动")
+                while self.thread_running:
+                    try:
+                        new_device = arr_filter(0.5)
+                        # print(f"[监控系统] 检测到新设备: {new_device.Description}")
+                        self.device_changed_callback()
+                    except wmi.x_wmi_timed_out:
+                        pass
 
-                try:
-                    removed_device = rem_filter(0.5)
-                    # print(f"[监控系统] 检测到设备移除: {removed_device.Description}")
-                    self.device_changed_callback()
-                except wmi.x_wmi_timed_out:
-                    pass
+                    try:
+                        removed_device = rem_filter(0.5)
+                        # print(f"[监控系统] 检测到设备移除: {removed_device.Description}")
+                        self.device_changed_callback()
+                    except wmi.x_wmi_timed_out:
+                        pass
 
-        except Exception as e:
-            print(f"[监控系统] 监控出错: {e}")
-        finally:
-            pythoncom.CoUninitialize()
-            # print("[监控系统] 监控服务已关闭")
+            except Exception as e:
+                print(f"[监控系统] 监控出错: {e}")
+            finally:
+                pythoncom.CoUninitialize()
+                # print("[监控系统] 监控服务已关闭")
+        except ImportError:
+            print("[监控系统] WMI模块未安装，跳过USB监控")
+            self.thread_running = False
 
     def start(self):
         if not self.monitor_thread.is_alive():
             self.monitor_thread.start()
 
     def stop(self):
+        """停止USB监控线程"""
+        print("正在停止USB监控线程...")
         self.thread_running = False
         if self.monitor_thread.is_alive():
-            self.monitor_thread.join(timeout=2)
+            self.monitor_thread.join(timeout=1)  # 减少等待时间到1秒
+            if self.monitor_thread.is_alive():
+                print("USB监控线程未能在1秒内停止，强制继续...")
 
 
-class LogVerboseMaskApp(QMainWindow):
+class BatManager(QMainWindow):
     COMMANDS_FILE = os.path.join(APP_CACHE_DIR, "commands.json")
     
     # 添加设备变化信号
     device_changed = pyqtSignal()
 
     def __init__(self):
+        import time
+        start_time = time.time()
+        print("开始初始化BatManager...")
+        
         super().__init__()
         # 确保缓存目录存在
         os.makedirs(APP_CACHE_DIR, exist_ok=True)
@@ -135,11 +149,30 @@ class LogVerboseMaskApp(QMainWindow):
         # 加载设备名称映射
         self.load_device_names()
         
-        self.refresh_devices()  # 初始化时刷新设备列表
+        # 延迟初始化USB监控和设备刷新，提升启动速度
+        self.usb_monitor = None
+        self.refresh_timer = None
+        
+        # 使用定时器延迟启动非关键功能
+        QTimer.singleShot(100, self.delayed_initialization)
+        
+        # 记录初始化完成时间
+        init_time = time.time() - start_time
+        print(f"BatManager初始化完成，耗时: {init_time:.2f}秒")
+
+    def delayed_initialization(self):
+        """延迟初始化非关键功能，提升启动速度"""
+        print("开始延迟初始化...")
         
         # 初始化USB设备监控
-        self.usb_monitor = USBDeviceMonitor(self.on_device_changed)
-        self.usb_monitor.start()
+        try:
+            self.usb_monitor = USBDeviceMonitor(self.on_device_changed)
+            self.usb_monitor.start()
+            print("USB监控已启动")
+        except ImportError:
+            print("WMI模块未安装，跳过USB监控")
+        except Exception as e:
+            print(f"USB监控启动失败: {e}")
         
         # 连接设备变化信号到刷新函数
         self.device_changed.connect(self.refresh_devices)
@@ -148,6 +181,10 @@ class LogVerboseMaskApp(QMainWindow):
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.refresh_devices)
         self.refresh_timer.start(5000)  # 每5秒刷新一次
+        
+        # 延迟刷新设备列表
+        QTimer.singleShot(200, self.refresh_devices)
+        print("延迟初始化完成")
 
     def load_commands(self):
         """从文件加载命令"""
@@ -1118,6 +1155,85 @@ class LogVerboseMaskApp(QMainWindow):
         lightscreen_action.triggered.connect(self.lightscreen)
         quick_menu.addAction(lightscreen_action)
         
+        # 添加分隔线
+        quick_menu.addSeparator()
+        
+        # 音量+功能
+        volume_up_action = QAction('音量+', self)
+        volume_up_action.setToolTip('增加音量')
+        volume_up_action.triggered.connect(lambda: self.send_key_event(24))  # KEYCODE_VOLUME_UP
+        quick_menu.addAction(volume_up_action)
+        
+        # 音量-功能
+        volume_down_action = QAction('音量-', self)
+        volume_down_action.setToolTip('减少音量')
+        volume_down_action.triggered.connect(lambda: self.send_key_event(25))  # KEYCODE_VOLUME_DOWN
+        quick_menu.addAction(volume_down_action)
+        
+        # Home键功能
+        home_action = QAction('Home键', self)
+        home_action.setToolTip('返回主屏幕')
+        home_action.triggered.connect(lambda: self.send_key_event(3))  # KEYCODE_HOME
+        quick_menu.addAction(home_action)
+
+
+    def send_key_event(self, keycode):
+        """通用的按键事件发送函数
+        
+        Args:
+            keycode (int): Android按键码
+                - 3: Home键
+                - 24: 音量+
+                - 25: 音量-
+                - 26: 电源键
+                - 27: 拍照键
+        """
+        selected_device = self.get_selected_device()
+        if not selected_device:
+            QMessageBox.warning(self, "设备错误", "请先选择有效的ADB设备！")
+            return
+
+        # 按键码对应的名称映射
+        key_names = {
+            3: "Home键",
+            24: "音量+",
+            25: "音量-",
+            26: "电源键",
+            27: "拍照键"
+        }
+        
+        key_name = key_names.get(keycode, f"按键{keycode}")
+
+        try:
+            command = f"adb -s {selected_device} shell input keyevent {keycode}"
+
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                startupinfo=startupinfo,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+
+            if result.returncode == 0:
+                print(f"已发送{key_name}按键事件: {command}")
+            else:
+                error_msg = f"发送{key_name}按键事件失败: {result.stderr}"
+                self.show_auto_close_message("错误", error_msg, QMessageBox.Critical, 3000)
+                print(error_msg)
+
+        except Exception as e:
+            error_msg = f"发送{key_name}按键事件时出错: {str(e)}"
+            self.show_auto_close_message("错误", error_msg, QMessageBox.Critical, 3000)
+            print(error_msg)
 
 
     def initUI(self):
@@ -2428,33 +2544,72 @@ class LogVerboseMaskApp(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭事件处理"""
+        print("开始关闭程序，正在清理资源...")
+        
         # 停止USB监控
-        if hasattr(self, 'usb_monitor'):
+        if hasattr(self, 'usb_monitor') and self.usb_monitor is not None:
+            print("停止USB监控...")
             self.usb_monitor.stop()
         
         # 停止定时器
-        if hasattr(self, 'refresh_timer'):
+        if hasattr(self, 'refresh_timer') and self.refresh_timer is not None:
+            print("停止刷新定时器...")
             self.refresh_timer.stop()
+        
+        # 停止批量拍摄相关线程
+        if hasattr(self, 'capture_thread') and self.capture_thread and self.capture_thread.is_alive():
+            print("停止批量拍摄线程...")
+            self.capture_running = False
+            self.capture_stop_event.set()
+            self.capture_thread.join(timeout=1)  # 最多等待1秒
+        
+        # 停止安装线程
+        if hasattr(self, 'install_thread') and self.install_thread and self.install_thread.isRunning():
+            print("停止安装线程...")
+            self.install_thread.terminate()
+            self.install_thread.wait(1000)  # 最多等待1秒
         
         # 关闭重命名工具窗口
         if hasattr(self, 'file_organizer') and self.file_organizer is not None:
+            print("关闭重命名工具窗口...")
             self.file_organizer.close()
         
         # 关闭下载对话框
         if hasattr(self, 'download_dialog') and self.download_dialog is not None:
+            print("关闭下载对话框...")
             self.download_dialog.close()
         
         # 停止所有投屏进程
         if hasattr(self, 'scrcpy_processes'):
+            print("停止投屏进程...")
             for device_id, process in self.scrcpy_processes.items():
                 if process is not None and process.poll() is None:
                     print(f"正在停止设备 {device_id} 的投屏...")
                     process.terminate()
                     try:
-                        process.wait(timeout=2)
+                        process.wait(timeout=1)  # 减少等待时间到1秒
                     except subprocess.TimeoutExpired:
+                        print(f"强制终止设备 {device_id} 的投屏进程...")
                         process.kill()
         
+        # 强制清理所有子进程
+        try:
+            import psutil
+            current_process = psutil.Process()
+            children = current_process.children(recursive=True)
+            for child in children:
+                try:
+                    if child.is_running():
+                        print(f"终止子进程: {child.pid}")
+                        child.terminate()
+                        child.wait(timeout=0.5)
+                except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                    pass
+        except ImportError:
+            # 如果没有psutil，使用传统方法
+            pass
+        
+        print("资源清理完成，程序即将退出")
         event.accept()
 
 
@@ -3696,10 +3851,15 @@ class FileDownloadDialog(QDialog):
                 return
             
             # 启动FileOrganizer重命名工具，并传入目标路径
-            self.file_organizer = FileOrganizer()
-            # 设置文件夹路径（不再需要folder_input，直接使用set_folder_list）
-            self.file_organizer.set_folder_list(target_path)
-            self.file_organizer.show()
+            try:
+                from rename import FileOrganizer
+                self.file_organizer = FileOrganizer()
+                # 设置文件夹路径（不再需要folder_input，直接使用set_folder_list）
+                self.file_organizer.set_folder_list(target_path)
+                self.file_organizer.show()
+            except ImportError:
+                QMessageBox.critical(self, "错误", "重命名工具模块未找到")
+                print("重命名工具模块未找到")
             print(f"已启动文件重命名工具，路径: {target_path}")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"启动重命名工具失败: {str(e)}")
@@ -3707,16 +3867,24 @@ class FileDownloadDialog(QDialog):
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        print("关闭下载对话框，正在清理资源...")
+        
         if hasattr(self, 'refresh_timer'):
+            print("停止刷新定时器...")
             self.refresh_timer.stop()
+            
         if hasattr(self, 'download_thread') and self.download_thread.isRunning():
-            self.download_thread.terminate()
-            self.download_thread.wait()
+            print("停止下载线程...")
+            self.download_thread.request_stop()  # 先请求停止
+            self.download_thread.terminate()     # 然后强制终止
+            self.download_thread.wait(1000)      # 最多等待1秒
         
         # 关闭重命名工具窗口
         if hasattr(self, 'file_organizer') and self.file_organizer is not None:
+            print("关闭重命名工具窗口...")
             self.file_organizer.close()
         
+        print("下载对话框资源清理完成")
         event.accept()
 
 
@@ -3741,6 +3909,13 @@ class DownloadThread(QThread):
         # 计算总任务数
         self.total_tasks = len(device_folder_combinations)
         self.completed_tasks = 0
+        
+        # 添加停止标志
+        self._stop_requested = False
+    
+    def request_stop(self):
+        """请求停止下载线程"""
+        self._stop_requested = True
     
     def run(self):
         """执行下载"""
@@ -3776,6 +3951,11 @@ class DownloadThread(QThread):
         failed_combinations = []
         
         for combination in self.device_folder_combinations:
+            # 检查是否请求停止
+            if self._stop_requested:
+                print("下载线程收到停止请求，正在退出...")
+                break
+                
             try:
                 device_id = combination['device_id']
                 device_display_name = combination['device_display_name']
@@ -4296,7 +4476,7 @@ class InstallApkThread(QThread):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     apply_stylesheet(app, theme='light_blue.xml', extra={'font_size': 16})
-    ex = LogVerboseMaskApp()
+    ex = BatManager()
     ex.show()
     sys.exit(app.exec_())
 
