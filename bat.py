@@ -27,6 +27,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
 )
 from PyQt5.QtWidgets import QScrollArea
+from PyQt5.QtCore import Qt, QMimeData
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 import subprocess
 from PyQt5.QtGui import QIcon
 import threading
@@ -41,6 +43,93 @@ from qt_material import apply_stylesheet
 
 # 全局变量定义缓存目录
 APP_CACHE_DIR = os.path.join(os.path.dirname(__file__), "app_cache")
+
+class DroppableWidget(QWidget):
+    """支持拖拽.bat文件的自定义Widget"""
+    
+    def __init__(self, parent=None, tab_name=""):
+        super().__init__(parent)
+        self.parent_manager = parent
+        self.tab_name = tab_name
+        self.setAcceptDrops(True)
+    
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """拖拽进入事件"""
+        if event.mimeData().hasUrls():
+            # 检查是否包含.bat文件
+            urls = event.mimeData().urls()
+            for url in urls:
+                if url.isLocalFile():
+                    file_path = url.toLocalFile()
+                    if file_path.lower().endswith('.bat'):
+                        event.acceptProposedAction()
+                        return
+        event.ignore()
+    
+    def dropEvent(self, event: QDropEvent):
+        """拖拽放下事件"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            for url in urls:
+                if url.isLocalFile():
+                    file_path = url.toLocalFile()
+                    if file_path.lower().endswith('.bat'):
+                        self.add_bat_file_to_tab(file_path)
+                        event.acceptProposedAction()
+                        return
+        event.ignore()
+    
+    def add_bat_file_to_tab(self, file_path):
+        """将.bat文件添加到对应的标签页"""
+        try:
+            # 读取.bat文件内容
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            
+            # 如果编码有问题，尝试其他编码
+            if not content.strip():
+                try:
+                    with open(file_path, 'r', encoding='gbk', errors='ignore') as f:
+                        content = f.read()
+                except:
+                    pass
+            
+            # 获取文件名作为脚本名称（去掉.bat扩展名）
+            script_name = os.path.splitext(os.path.basename(file_path))[0]
+            
+            # 检查脚本名称是否已存在
+            if self.parent_manager and hasattr(self.parent_manager, 'specific_commands'):
+                for tab_name, tab_commands in self.parent_manager.specific_commands.items():
+                    if script_name in tab_commands:
+                        QMessageBox.warning(self, "错误", f"脚本名称 '{script_name}' 已存在于 '{tab_name}' 标签页中！")
+                        return
+                
+                # 确保标签页存在
+                if self.tab_name not in self.parent_manager.specific_commands:
+                    self.parent_manager.specific_commands[self.tab_name] = {}
+                
+                # 将内容按行分割，过滤空行和注释行
+                lines = []
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if line and not line.startswith('@') and not line.startswith('REM') and not line.startswith('rem'):
+                        lines.append(line)
+                
+                if lines:
+                    # 添加脚本到标签页
+                    self.parent_manager.specific_commands[self.tab_name][script_name] = lines
+                    self.parent_manager.save_commands()
+                    
+                    # 重新创建标签页以显示新脚本
+                    self.parent_manager.recreate_tabs()
+                    
+                    QMessageBox.information(self, "成功", f"已成功将 '{script_name}' 脚本添加到 '{self.tab_name}' 标签页！")
+                else:
+                    QMessageBox.warning(self, "错误", "无法从.bat文件中提取有效的命令内容！")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"读取.bat文件时发生错误：{str(e)}")
+
 
 class USBDeviceMonitor:
     """USB设备实时监控类（Windows平台专用）"""
@@ -1403,7 +1492,15 @@ class BatManager(QMainWindow):
             
             # 创建滚动区域
             scroll_area = QScrollArea()
-            scroll_widget = QWidget()
+            
+            # 根据标签页类型选择Widget类型
+            if tab_name == "高通固定页":
+                # 高通固定页：使用普通Widget，不支持拖拽
+                scroll_widget = QWidget()
+            else:
+                # 其他标签页：使用支持拖拽的Widget
+                scroll_widget = DroppableWidget(self, tab_name)
+            
             scroll_layout = QGridLayout(scroll_widget)
             scroll_layout.setContentsMargins(10, 10, 10, 10)  # 设置内边距
             scroll_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)  # 设置顶部左对齐
